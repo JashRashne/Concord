@@ -1,15 +1,20 @@
 package main
 
 import (
-	"flag"
 	"fmt"
+	"os"
+
+	"github.com/jashrashne/concord/internal/config"
 )
 
 func main() {
-	port := flag.Int("port", 8080, "port for Concord to listen on")
-
-	flag.Parse()
+	cfg, err := config.Parse()
+	if err != nil {
+		fmt.Println("configuration error", err)
+		os.Exit(1)
+	}
 
 	fmt.Println("Concord starting...")
-	fmt.Println("Port:", *port)
+	fmt.Println("Node ID:", cfg.NodeID)
+	fmt.Println("Port:", cfg.Port)
 }
