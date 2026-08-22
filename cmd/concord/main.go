@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/jashrashne/concord/internal/config"
+	"github.com/jashrashne/concord/internal/node"
 )
 
 func main() {
@@ -14,7 +15,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Concord starting...")
-	fmt.Println("Node ID:", cfg.NodeID)
-	fmt.Println("Port:", cfg.Port)
+	n := node.New(cfg.NodeID, cfg.Port)
+	if err := n.Start(); err != nil {
+		fmt.Println("node error : ", err)
+		os.Exit(1)
+	}
 }
