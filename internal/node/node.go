@@ -31,6 +31,18 @@ func (n *Node) Start() error {
 			return err
 		}
 		fmt.Printf("Node %s accepted a connection from %s\n", n.ID, conn.RemoteAddr())
+
+		buffer := make([]byte, 1024)
+		bytesRead, err := conn.Read(buffer)
+		if err != nil {
+			conn.Close()
+			fmt.Println("failed to read from connections", err)
+			continue
+		}
+
+		message := string(buffer[:bytesRead])
+		fmt.Printf("Node %s recieved: %s\n", n.ID, message)
+
 		conn.Close()
 	}
 }
