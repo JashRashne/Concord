@@ -77,7 +77,35 @@ func Parse() (Config, error) {
 		return Config{}, errors.New("ping timeout must be greater than zero")
 	}
 
+	if err := validatePeers(cfg.NodeID, cfg.Peers); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
+}
+
+func validatePeers(nodeID string, peers []peer.Peer) error {
+	seenIDs := make(map[string]bool)
+	seenAddresses := make(map[string]bool)
+
+	for _, p := range peers {
+		if p.ID == nodeID {
+			return fmt.Errorf("node %q cannot be its own peer", nodeID)
+		}
+
+		if seenIDs[p.ID] {
+			return fmt.Errorf("duplicate peer ID %q", p.ID)
+		}
+
+		if seenAddresses[p.Address] {
+			return fmt.Errorf("duplicate peer address %q", p.Address)
+		}
+
+		seenIDs[p.ID] = true
+		seenAddresses[p.Address] = true
+	}
+
+	return nil
 }
 
 func (p *peerList) Set(value string) error {
@@ -94,6 +122,7 @@ func (p *peerList) Set(value string) error {
 
 	return nil
 }
+
 func (p *peerList) String() string {
 	if p == nil {
 		return ""
