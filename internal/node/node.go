@@ -5,20 +5,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"time"
 
+	"github.com/jashrashne/concord/internal/peer"
 	"github.com/jashrashne/concord/internal/protocol"
 )
 
 type Node struct {
-	ID   string
-	Port int
+	ID    string
+	Port  int
+	Peers []peer.Peer
 }
 
 func New(id string, port int) *Node {
 	return &Node{
-		ID:   id,
-		Port: port,
+		ID:    id,
+		Port:  port,
+		Peers: make([]peer.Peer, 0),
 	}
+}
+
+func (n *Node) AddPeer(p peer.Peer) {
+	n.Peers = append(n.Peers, p)
 }
 
 func (n *Node) Send(address string, message protocol.Message) error {
@@ -47,6 +55,9 @@ func (n *Node) Start() error {
 	defer listener.Close()
 
 	fmt.Printf("Node %s listening on port %d\n", n.ID, n.Port)
+	for _, p := range n.Peers {
+		fmt.Printf("Known peer: %s at %s\n", p.ID, p.Address)
+	}
 
 	for {
 		conn, err := listener.Accept()
@@ -115,12 +126,17 @@ func writeMessage(conn net.Conn, message protocol.Message) error {
 	return err
 }
 
-func (n *Node) Ping(address string) error {
+func (n *Node) Ping(address string, timeout time.Duration) error {
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+
+	deadline := time.Now().Add(timeout)
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
 
 	ping := protocol.Message{
 		Type: protocol.MessageTypePing,
@@ -135,10 +151,10 @@ func (n *Node) Ping(address string) error {
 
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
-			return err
+			return fmt.Errorf("failed waiting for PONG from %s: %w", address, err)
 		}
 
-		return fmt.Errorf("peer closed connection without responding")
+		return fmt.Errorf("peer %s closed connection without responding", address)
 	}
 
 	var response protocol.Message

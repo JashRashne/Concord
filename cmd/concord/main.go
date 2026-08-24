@@ -6,6 +6,7 @@ import (
 
 	"github.com/jashrashne/concord/internal/config"
 	"github.com/jashrashne/concord/internal/node"
+
 	"github.com/jashrashne/concord/internal/protocol"
 )
 
@@ -18,21 +19,25 @@ func main() {
 
 	n := node.New(cfg.NodeID, cfg.Port)
 
+	for _, p := range cfg.Peers {
+		n.AddPeer(p)
+	}
+
 	if cfg.Ping {
-		if err := n.Ping(cfg.Peer); err != nil {
+		if err := n.Ping(cfg.Peers[0].Address, cfg.PingTimeout); err != nil {
 			fmt.Println("ping error:", err)
 			os.Exit(1)
 		}
 	}
 
-	if cfg.Peer != "" && cfg.Message != "" {
+	if cfg.Message != "" {
 		message := protocol.Message{
-			Type: "MESSAGE",
+			Type: protocol.MessageTypeMessage,
 			From: cfg.NodeID,
 			Data: cfg.Message,
 		}
 
-		if err := n.Send(cfg.Peer, message); err != nil {
+		if err := n.Send(cfg.Peers[0].Address, message); err != nil {
 			fmt.Println("send error:", err)
 			os.Exit(1)
 		}

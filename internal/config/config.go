@@ -3,31 +3,50 @@ package config
 import (
 	"errors"
 	"flag"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/jashrashne/concord/internal/peer"
 )
 
+type peerList []peer.Peer
 type Config struct {
-	NodeID  string
-	Port    int
-	Peer    string
-	Message string
-	Ping    bool
+	NodeID      string
+	Port        int
+	Peers       []peer.Peer
+	Message     string
+	Ping        bool
+	PingTimeout time.Duration
 }
 
 func Parse() (Config, error) {
+	var peers peerList
+
 	nodeID := flag.String("node-id", "node-1", "unique ID for this Concord node")
 	port := flag.Int("port", 8080, "port for Concord to listen on")
-	peer := flag.String("peer", "", "address of peer node")
+	flag.Var(
+		&peers,
+		"peer",
+		"peer in ID=ADDRESS format (repeatable)",
+	)
 	message := flag.String("message", "", "message to send the peer node")
 	ping := flag.Bool("ping", false, "ping the configured peer")
+	pingTimeout := flag.Duration(
+		"ping-timeout",
+		3*time.Second,
+		"maximum time to wait for a PONG",
+	)
 
 	flag.Parse()
 
 	cfg := Config{
-		NodeID:  *nodeID,
-		Port:    *port,
-		Peer:    *peer,
-		Message: *message,
-		Ping:    *ping,
+		NodeID:      *nodeID,
+		Port:        *port,
+		Peers:       []peer.Peer(peers),
+		Message:     *message,
+		Ping:        *ping,
+		PingTimeout: *pingTimeout,
 	}
 
 	if cfg.NodeID == "" {
@@ -38,13 +57,56 @@ func Parse() (Config, error) {
 		return Config{}, errors.New("port must be between 1 and 65535")
 	}
 
-	if cfg.Ping && cfg.Peer == "" {
-		return Config{}, errors.New("--ping requires --peer")
+	if cfg.Ping && len(cfg.Peers) != 1 {
+		return Config{}, errors.New("--ping requires exactly one --peer")
+	}
+
+	if cfg.Message != "" && len(cfg.Peers) != 1 {
+		return Config{}, errors.New("--message requires exactly one --peer")
 	}
 
 	if cfg.Ping && cfg.Message != "" {
 		return Config{}, errors.New("--ping and --message cannot be used together")
 	}
 
+	if cfg.Ping && cfg.Message != "" {
+		return Config{}, errors.New("--ping and --message cannot be used together")
+	}
+
+	if cfg.PingTimeout <= 0 {
+		return Config{}, errors.New("ping timeout must be greater than zero")
+	}
+
 	return cfg, nil
+}
+
+func (p *peerList) Set(value string) error {
+	id, address, found := strings.Cut(value, "=")
+
+	if !found || id == "" || address == "" {
+		return fmt.Errorf("peer must be in ID=ADDRESS format")
+	}
+
+	*p = append(*p, peer.Peer{
+		ID:      id,
+		Address: address,
+	})
+
+	return nil
+}
+func (p *peerList) String() string {
+	if p == nil {
+		return ""
+	}
+
+	parts := make([]string, 0, len(*p))
+
+	for _, currentPeer := range *p {
+		parts = append(
+			parts,
+			fmt.Sprintf("%s=%s", currentPeer.ID, currentPeer.Address),
+		)
+	}
+
+	return strings.Join(parts, ",")
 }
