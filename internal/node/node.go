@@ -28,15 +28,7 @@ func (n *Node) Send(address string, message protocol.Message) error {
 	}
 	defer conn.Close()
 
-	data, err := json.Marshal(message)
-	if err != nil {
-		return err
-	}
-
-	data = append(data, '\n')
-
-	_, err = conn.Write(data)
-	if err != nil {
+	if err := writeMessage(conn, message); err != nil {
 		return err
 	}
 
@@ -81,16 +73,85 @@ func (n *Node) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		fmt.Printf(
-			"Node %s received message from %s: type=%s data=%s\n",
-			n.ID,
-			message.From,
-			message.Type,
-			message.Data,
-		)
+		switch message.Type {
+		case protocol.MessageTypePing:
+			fmt.Printf("Node %s received PING from %s\n", n.ID, message.From)
+
+			response := protocol.Message{
+				Type: protocol.MessageTypePong,
+				From: n.ID,
+			}
+
+			if err := writeMessage(conn, response); err != nil {
+				fmt.Println("failed to send PONG:", err)
+				return
+			}
+
+		default:
+			fmt.Printf(
+				"Node %s received message from %s: type=%s data=%s\n",
+				n.ID,
+				message.From,
+				message.Type,
+				message.Data,
+			)
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		fmt.Println("failed to read from connection:", err)
 	}
+}
+
+func writeMessage(conn net.Conn, message protocol.Message) error {
+	data, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
+
+	data = append(data, '\n')
+
+	_, err = conn.Write(data)
+	return err
+}
+
+func (n *Node) Ping(address string) error {
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	ping := protocol.Message{
+		Type: protocol.MessageTypePing,
+		From: n.ID,
+	}
+
+	if err := writeMessage(conn, ping); err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(conn)
+
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+
+		return fmt.Errorf("peer closed connection without responding")
+	}
+
+	var response protocol.Message
+
+	if err := json.Unmarshal([]byte(scanner.Text()), &response); err != nil {
+		return err
+	}
+
+	if response.Type != protocol.MessageTypePong {
+		return fmt.Errorf("expected PONG, received %s", response.Type)
+	}
+
+	fmt.Printf("Node %s received PONG from %s\n", n.ID, response.From)
+
+	return nil
 }

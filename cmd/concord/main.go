@@ -18,6 +18,13 @@ func main() {
 
 	n := node.New(cfg.NodeID, cfg.Port)
 
+	if cfg.Ping {
+		if err := n.Ping(cfg.Peer); err != nil {
+			fmt.Println("ping error:", err)
+			os.Exit(1)
+		}
+	}
+
 	if cfg.Peer != "" && cfg.Message != "" {
 		message := protocol.Message{
 			Type: "MESSAGE",
