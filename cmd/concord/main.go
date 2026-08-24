@@ -6,6 +6,7 @@ import (
 
 	"github.com/jashrashne/concord/internal/config"
 	"github.com/jashrashne/concord/internal/node"
+	"github.com/jashrashne/concord/internal/protocol"
 )
 
 func main() {
@@ -18,8 +19,14 @@ func main() {
 	n := node.New(cfg.NodeID, cfg.Port)
 
 	if cfg.Peer != "" && cfg.Message != "" {
-		if err := n.Send(cfg.Peer, cfg.Message); err != nil {
-			fmt.Println("error while sending: ", err)
+		message := protocol.Message{
+			Type: "MESSAGE",
+			From: cfg.NodeID,
+			Data: cfg.Message,
+		}
+
+		if err := n.Send(cfg.Peer, message); err != nil {
+			fmt.Println("send error:", err)
 			os.Exit(1)
 		}
 	}

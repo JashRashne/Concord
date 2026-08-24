@@ -1,8 +1,12 @@
 package node
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"net"
+
+	"github.com/jashrashne/concord/internal/protocol"
 )
 
 type Node struct {
@@ -17,19 +21,26 @@ func New(id string, port int) *Node {
 	}
 }
 
-func (n *Node) Send(address string, message string) error {
+func (n *Node) Send(address string, message protocol.Message) error {
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	_, err = conn.Write([]byte(message))
+	data, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Node %s sent message to %s: %s\n", n.ID, address, message)
+	data = append(data, '\n')
+
+	_, err = conn.Write(data)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Node %s sent message to %s\n", n.ID, address)
 
 	return nil
 }
@@ -60,15 +71,26 @@ func (n *Node) handleConnection(conn net.Conn) {
 
 	fmt.Printf("Node %s accepted connection from %s\n", n.ID, conn.RemoteAddr())
 
-	buffer := make([]byte, 1024)
+	scanner := bufio.NewScanner(conn)
 
-	bytesRead, err := conn.Read(buffer)
-	if err != nil {
-		fmt.Println("failed to read from connection:", err)
-		return
+	for scanner.Scan() {
+		var message protocol.Message
+
+		if err := json.Unmarshal([]byte(scanner.Text()), &message); err != nil {
+			fmt.Println("failed to decode message:", err)
+			continue
+		}
+
+		fmt.Printf(
+			"Node %s received message from %s: type=%s data=%s\n",
+			n.ID,
+			message.From,
+			message.Type,
+			message.Data,
+		)
 	}
 
-	message := string(buffer[:bytesRead])
-
-	fmt.Printf("Node %s received: %s\n", n.ID, message)
+	if err := scanner.Err(); err != nil {
+		fmt.Println("failed to read from connection:", err)
+	}
 }
