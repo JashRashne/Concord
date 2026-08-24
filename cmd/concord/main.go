@@ -16,6 +16,14 @@ func main() {
 	}
 
 	n := node.New(cfg.NodeID, cfg.Port)
+
+	if cfg.Peer != "" && cfg.Message != "" {
+		if err := n.Send(cfg.Peer, cfg.Message); err != nil {
+			fmt.Println("error while sending: ", err)
+			os.Exit(1)
+		}
+	}
+
 	if err := n.Start(); err != nil {
 		fmt.Println("node error : ", err)
 		os.Exit(1)
