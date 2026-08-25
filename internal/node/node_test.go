@@ -55,3 +55,24 @@ func TestPeerReturnsFalseForUnknownPeer(t *testing.T) {
 		t.Fatalf("expected zero-value peer, got %+v", got)
 	}
 }
+
+func TestNewNodeCreatesStore(t *testing.T) {
+	n := New("node-1", 8080)
+
+	if n.Store == nil {
+		t.Fatal("expected node store to be initialized")
+	}
+}
+
+func TestNodesHaveIndependentStores(t *testing.T) {
+	node1 := New("node-1", 8080)
+	node2 := New("node-2", 8081)
+
+	node1.Store.Set("name", "alice")
+
+	_, ok := node2.Store.Get("name")
+
+	if ok {
+		t.Fatal("expected node stores to be independent")
+	}
+}

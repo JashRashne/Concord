@@ -9,12 +9,14 @@ import (
 
 	"github.com/jashrashne/concord/internal/peer"
 	"github.com/jashrashne/concord/internal/protocol"
+	"github.com/jashrashne/concord/internal/store"
 )
 
 type Node struct {
 	ID    string
 	Port  int
 	Peers []peer.Peer
+	Store *store.Store
 }
 
 func New(id string, port int) *Node {
@@ -22,6 +24,7 @@ func New(id string, port int) *Node {
 		ID:    id,
 		Port:  port,
 		Peers: make([]peer.Peer, 0),
+		Store: store.New(),
 	}
 }
 
@@ -107,6 +110,16 @@ func (n *Node) handleConnection(conn net.Conn) {
 				fmt.Println("failed to send PONG:", err)
 				return
 			}
+
+		case protocol.MessageTypeSet:
+			n.Store.Set(message.Key, message.Value)
+
+			fmt.Printf(
+				"Node %s stored key=%s value=%s\n",
+				n.ID,
+				message.Key,
+				message.Value,
+			)
 
 		default:
 			fmt.Printf(

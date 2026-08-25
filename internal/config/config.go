@@ -19,6 +19,10 @@ type Config struct {
 	Message     string
 	Ping        bool
 	PingTimeout time.Duration
+
+	Set   bool
+	Key   string
+	Value string
 }
 
 func Parse() (Config, error) {
@@ -43,6 +47,23 @@ func Parse() (Config, error) {
 		"",
 		"ID of the peer to contact",
 	)
+	set := flag.Bool(
+		"set",
+		false,
+		"set a key/value pair on the target peer",
+	)
+
+	key := flag.String(
+		"key",
+		"",
+		"key for a database operation",
+	)
+
+	value := flag.String(
+		"value",
+		"",
+		"value for a SET operation",
+	)
 
 	flag.Parse()
 
@@ -54,6 +75,10 @@ func Parse() (Config, error) {
 		Ping:        *ping,
 		PingTimeout: *pingTimeout,
 		Target:      *target,
+
+		Set:   *set,
+		Key:   *key,
+		Value: *value,
 	}
 
 	if cfg.NodeID == "" {
@@ -86,6 +111,18 @@ func Parse() (Config, error) {
 
 	if err := validatePeers(cfg.NodeID, cfg.Peers); err != nil {
 		return Config{}, err
+	}
+
+	if cfg.Set && cfg.Target == "" {
+		return Config{}, errors.New("--set requires --target")
+	}
+
+	if cfg.Set && cfg.Key == "" {
+		return Config{}, errors.New("--set requires --key")
+	}
+
+	if cfg.Set && (cfg.Ping || cfg.Message != "") {
+		return Config{}, errors.New("--set cannot be used with --ping or --message")
 	}
 
 	return cfg, nil

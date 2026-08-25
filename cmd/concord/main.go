@@ -23,7 +23,7 @@ func main() {
 		n.AddPeer(p)
 	}
 
-	if cfg.Ping || cfg.Message != "" {
+	if cfg.Ping || cfg.Message != "" || cfg.Set {
 		targetPeer, ok := n.Peer(cfg.Target)
 		if !ok {
 			fmt.Printf("unknown target peer: %s\n", cfg.Target)
@@ -46,6 +46,20 @@ func main() {
 
 			if err := n.Send(targetPeer.Address, message); err != nil {
 				fmt.Println("send error:", err)
+				os.Exit(1)
+			}
+		}
+
+		if cfg.Set {
+			message := protocol.Message{
+				Type:  protocol.MessageTypeSet,
+				From:  cfg.NodeID,
+				Key:   cfg.Key,
+				Value: cfg.Value,
+			}
+
+			if err := n.Send(targetPeer.Address, message); err != nil {
+				fmt.Println("set error:", err)
 				os.Exit(1)
 			}
 		}
