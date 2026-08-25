@@ -121,6 +121,16 @@ func (n *Node) handleConnection(conn net.Conn) {
 				message.Value,
 			)
 
+			response := protocol.Message{
+				Type: protocol.MessageTypeOK,
+				From: n.ID,
+			}
+
+			if err := writeMessage(conn, response); err != nil {
+				fmt.Println("failed to send OK:", err)
+				return
+			}
+
 		case protocol.MessageTypeGet:
 			value, ok := n.Store.Get(message.Key)
 
@@ -148,6 +158,26 @@ func (n *Node) handleConnection(conn net.Conn) {
 				fmt.Println("failed to send VALUE:", err)
 				return
 			}
+
+		case protocol.MessageTypeDelete:
+			n.Store.Delete(message.Key)
+
+			fmt.Printf(
+				"Node %s deleted key=%s\n",
+				n.ID,
+				message.Key,
+			)
+
+			response := protocol.Message{
+				Type: protocol.MessageTypeOK,
+				From: n.ID,
+			}
+
+			if err := writeMessage(conn, response); err != nil {
+				fmt.Println("failed to send OK:", err)
+				return
+			}
+
 		default:
 			fmt.Printf(
 				"Node %s received message from %s: type=%s data=%s\n",
@@ -273,4 +303,46 @@ func (n *Node) Get(address string, key string, timeout time.Duration) (string, b
 			response.Type,
 		)
 	}
+}
+
+func (n *Node) SendAndWaitForOK(address string, message protocol.Message, timeout time.Duration) error {
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(timeout)
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+
+	if err := writeMessage(conn, message); err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(conn)
+
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("failed waiting for response: %w", err)
+		}
+
+		return fmt.Errorf("peer closed connection without responding")
+	}
+
+	var response protocol.Message
+
+	if err := json.Unmarshal([]byte(scanner.Text()), &response); err != nil {
+		return err
+	}
+
+	if response.Type != protocol.MessageTypeOK {
+		return fmt.Errorf(
+			"expected OK response, received %s",
+			response.Type,
+		)
+	}
+
+	return nil
 }

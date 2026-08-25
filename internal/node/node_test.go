@@ -1,9 +1,15 @@
 package node
 
 import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/jashrashne/concord/internal/peer"
+	"github.com/jashrashne/concord/internal/protocol"
 )
 
 func TestPeerFindsPeerByID(t *testing.T) {
@@ -74,5 +80,144 @@ func TestNodesHaveIndependentStores(t *testing.T) {
 
 	if ok {
 		t.Fatal("expected node stores to be independent")
+	}
+}
+
+func TestSendAndWaitForOKSuccess(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	serverErr := make(chan error, 1)
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+
+		scanner := bufio.NewScanner(conn)
+
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				serverErr <- err
+				return
+			}
+
+			serverErr <- fmt.Errorf("client closed connection without sending a message")
+			return
+		}
+
+		var request protocol.Message
+
+		if err := json.Unmarshal([]byte(scanner.Text()), &request); err != nil {
+			serverErr <- err
+			return
+		}
+
+		response := protocol.Message{
+			Type: protocol.MessageTypeOK,
+			From: "server",
+		}
+
+		if err := writeMessage(conn, response); err != nil {
+			serverErr <- err
+			return
+		}
+
+		serverErr <- nil
+	}()
+
+	n := New("client", 0)
+
+	message := protocol.Message{
+		Type:  protocol.MessageTypeSet,
+		From:  n.ID,
+		Key:   "name",
+		Value: "alice",
+	}
+
+	err = n.SendAndWaitForOK(
+		listener.Addr().String(),
+		message,
+		time.Second,
+	)
+
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("fake server failed: %v", err)
+	}
+}
+
+func TestSendAndWaitForOKRejectsUnexpectedResponse(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	serverErr := make(chan error, 1)
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+
+		scanner := bufio.NewScanner(conn)
+
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				serverErr <- err
+				return
+			}
+
+			serverErr <- fmt.Errorf("client closed connection without sending a message")
+			return
+		}
+
+		response := protocol.Message{
+			Type: protocol.MessageTypeValue,
+			From: "server",
+		}
+
+		if err := writeMessage(conn, response); err != nil {
+			serverErr <- err
+			return
+		}
+
+		serverErr <- nil
+	}()
+
+	n := New("client", 0)
+
+	message := protocol.Message{
+		Type:  protocol.MessageTypeSet,
+		From:  n.ID,
+		Key:   "name",
+		Value: "alice",
+	}
+
+	err = n.SendAndWaitForOK(
+		listener.Addr().String(),
+		message,
+		time.Second,
+	)
+
+	if err == nil {
+		t.Fatal("expected error for unexpected response, got nil")
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("fake server failed: %v", err)
 	}
 }

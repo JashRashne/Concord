@@ -20,10 +20,11 @@ type Config struct {
 	Ping        bool
 	PingTimeout time.Duration
 
-	Set   bool
-	Key   string
-	Value string
-	Get   bool
+	Set    bool
+	Key    string
+	Value  string
+	Get    bool
+	Delete bool
 }
 
 func Parse() (Config, error) {
@@ -71,6 +72,11 @@ func Parse() (Config, error) {
 		false,
 		"get a value from the target peer",
 	)
+	deleteKey := flag.Bool(
+		"delete",
+		false,
+		"delete a key from the target peer",
+	)
 
 	flag.Parse()
 
@@ -83,10 +89,11 @@ func Parse() (Config, error) {
 		PingTimeout: *pingTimeout,
 		Target:      *target,
 
-		Set:   *set,
-		Key:   *key,
-		Value: *value,
-		Get:   *get,
+		Set:    *set,
+		Key:    *key,
+		Value:  *value,
+		Get:    *get,
+		Delete: *deleteKey,
 	}
 
 	if cfg.NodeID == "" {
@@ -143,6 +150,18 @@ func Parse() (Config, error) {
 
 	if cfg.Get && (cfg.Set || cfg.Ping || cfg.Message != "") {
 		return Config{}, errors.New("--get cannot be used with --set, --ping, or --message")
+	}
+
+	if cfg.Delete && cfg.Target == "" {
+		return Config{}, errors.New("--delete requires --target")
+	}
+
+	if cfg.Delete && cfg.Key == "" {
+		return Config{}, errors.New("--delete requires --key")
+	}
+
+	if cfg.Delete && (cfg.Set || cfg.Get || cfg.Ping || cfg.Message != "") {
+		return Config{}, errors.New("--delete cannot be used with --set, --get, --ping, or --message")
 	}
 
 	return cfg, nil

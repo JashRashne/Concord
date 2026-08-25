@@ -8,6 +8,8 @@ const (
 	MessageTypeGet      = "GET"
 	MessageTypeValue    = "VALUE"
 	MessageTypeNotFound = "NOT_FOUND"
+	MessageTypeDelete   = "DELETE"
+	MessageTypeOK       = "OK"
 )
 
 type Message struct {

@@ -23,7 +23,7 @@ func main() {
 		n.AddPeer(p)
 	}
 
-	if cfg.Ping || cfg.Message != "" || cfg.Set || cfg.Get {
+	if cfg.Ping || cfg.Message != "" || cfg.Set || cfg.Get || cfg.Delete {
 		targetPeer, ok := n.Peer(cfg.Target)
 		if !ok {
 			fmt.Printf("unknown target peer: %s\n", cfg.Target)
@@ -58,7 +58,11 @@ func main() {
 				Value: cfg.Value,
 			}
 
-			if err := n.Send(targetPeer.Address, message); err != nil {
+			if err := n.SendAndWaitForOK(
+				targetPeer.Address,
+				message,
+				cfg.PingTimeout,
+			); err != nil {
 				fmt.Println("set error:", err)
 				os.Exit(1)
 			}
@@ -81,6 +85,23 @@ func main() {
 			}
 
 			fmt.Printf("VALUE %s\n", value)
+		}
+
+		if cfg.Delete {
+			message := protocol.Message{
+				Type: protocol.MessageTypeDelete,
+				From: cfg.NodeID,
+				Key:  cfg.Key,
+			}
+
+			if err := n.SendAndWaitForOK(
+				targetPeer.Address,
+				message,
+				cfg.PingTimeout,
+			); err != nil {
+				fmt.Println("delete error:", err)
+				os.Exit(1)
+			}
 		}
 
 		return
