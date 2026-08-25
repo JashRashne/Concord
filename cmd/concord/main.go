@@ -23,7 +23,7 @@ func main() {
 		n.AddPeer(p)
 	}
 
-	if cfg.Ping || cfg.Message != "" || cfg.Set {
+	if cfg.Ping || cfg.Message != "" || cfg.Set || cfg.Get {
 		targetPeer, ok := n.Peer(cfg.Target)
 		if !ok {
 			fmt.Printf("unknown target peer: %s\n", cfg.Target)
@@ -62,6 +62,25 @@ func main() {
 				fmt.Println("set error:", err)
 				os.Exit(1)
 			}
+		}
+
+		if cfg.Get {
+			value, ok, err := n.Get(
+				targetPeer.Address,
+				cfg.Key,
+				cfg.PingTimeout,
+			)
+			if err != nil {
+				fmt.Println("get error:", err)
+				os.Exit(1)
+			}
+
+			if !ok {
+				fmt.Println("NOT_FOUND")
+				return
+			}
+
+			fmt.Printf("VALUE %s\n", value)
 		}
 
 		return

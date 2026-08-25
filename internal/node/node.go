@@ -121,6 +121,33 @@ func (n *Node) handleConnection(conn net.Conn) {
 				message.Value,
 			)
 
+		case protocol.MessageTypeGet:
+			value, ok := n.Store.Get(message.Key)
+
+			if !ok {
+				response := protocol.Message{
+					Type: protocol.MessageTypeNotFound,
+					From: n.ID,
+				}
+
+				if err := writeMessage(conn, response); err != nil {
+					fmt.Println("failed to send NOT_FOUND:", err)
+					return
+				}
+
+				break
+			}
+
+			response := protocol.Message{
+				Type:  protocol.MessageTypeValue,
+				From:  n.ID,
+				Value: value,
+			}
+
+			if err := writeMessage(conn, response); err != nil {
+				fmt.Println("failed to send VALUE:", err)
+				return
+			}
 		default:
 			fmt.Printf(
 				"Node %s received message from %s: type=%s data=%s\n",
@@ -193,4 +220,57 @@ func (n *Node) Ping(address string, timeout time.Duration) error {
 	fmt.Printf("Node %s received PONG from %s\n", n.ID, response.From)
 
 	return nil
+}
+
+func (n *Node) Get(address string, key string, timeout time.Duration) (string, bool, error) {
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		return "", false, err
+	}
+	defer conn.Close()
+
+	deadline := time.Now().Add(timeout)
+	if err := conn.SetDeadline(deadline); err != nil {
+		return "", false, err
+	}
+
+	request := protocol.Message{
+		Type: protocol.MessageTypeGet,
+		From: n.ID,
+		Key:  key,
+	}
+
+	if err := writeMessage(conn, request); err != nil {
+		return "", false, err
+	}
+
+	scanner := bufio.NewScanner(conn)
+
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return "", false, fmt.Errorf("failed waiting for GET response: %w", err)
+		}
+
+		return "", false, fmt.Errorf("peer closed connection without responding")
+	}
+
+	var response protocol.Message
+
+	if err := json.Unmarshal([]byte(scanner.Text()), &response); err != nil {
+		return "", false, err
+	}
+
+	switch response.Type {
+	case protocol.MessageTypeValue:
+		return response.Value, true, nil
+
+	case protocol.MessageTypeNotFound:
+		return "", false, nil
+
+	default:
+		return "", false, fmt.Errorf(
+			"unexpected GET response type: %s",
+			response.Type,
+		)
+	}
 }

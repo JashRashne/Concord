@@ -1,10 +1,13 @@
 package protocol
 
 const (
-	MessageTypeMessage = "MESSAGE"
-	MessageTypePing    = "PING"
-	MessageTypePong    = "PONG"
-	MessageTypeSet     = "SET"
+	MessageTypeMessage  = "MESSAGE"
+	MessageTypePing     = "PING"
+	MessageTypePong     = "PONG"
+	MessageTypeSet      = "SET"
+	MessageTypeGet      = "GET"
+	MessageTypeValue    = "VALUE"
+	MessageTypeNotFound = "NOT_FOUND"
 )
 
 type Message struct {

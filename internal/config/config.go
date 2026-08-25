@@ -23,6 +23,7 @@ type Config struct {
 	Set   bool
 	Key   string
 	Value string
+	Get   bool
 }
 
 func Parse() (Config, error) {
@@ -65,6 +66,12 @@ func Parse() (Config, error) {
 		"value for a SET operation",
 	)
 
+	get := flag.Bool(
+		"get",
+		false,
+		"get a value from the target peer",
+	)
+
 	flag.Parse()
 
 	cfg := Config{
@@ -79,6 +86,7 @@ func Parse() (Config, error) {
 		Set:   *set,
 		Key:   *key,
 		Value: *value,
+		Get:   *get,
 	}
 
 	if cfg.NodeID == "" {
@@ -123,6 +131,18 @@ func Parse() (Config, error) {
 
 	if cfg.Set && (cfg.Ping || cfg.Message != "") {
 		return Config{}, errors.New("--set cannot be used with --ping or --message")
+	}
+
+	if cfg.Get && cfg.Target == "" {
+		return Config{}, errors.New("--get requires --target")
+	}
+
+	if cfg.Get && cfg.Key == "" {
+		return Config{}, errors.New("--get requires --key")
+	}
+
+	if cfg.Get && (cfg.Set || cfg.Ping || cfg.Message != "") {
+		return Config{}, errors.New("--get cannot be used with --set, --ping, or --message")
 	}
 
 	return cfg, nil
