@@ -29,6 +29,16 @@ func (n *Node) AddPeer(p peer.Peer) {
 	n.Peers = append(n.Peers, p)
 }
 
+func (n *Node) Peer(id string) (peer.Peer, bool) {
+	for _, p := range n.Peers {
+		if p.ID == id {
+			return p, true
+		}
+	}
+
+	return peer.Peer{}, false
+}
+
 func (n *Node) Send(address string, message protocol.Message) error {
 	conn, err := net.Dial("tcp", address)
 	if err != nil {

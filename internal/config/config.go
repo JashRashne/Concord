@@ -15,6 +15,7 @@ type Config struct {
 	NodeID      string
 	Port        int
 	Peers       []peer.Peer
+	Target      string
 	Message     string
 	Ping        bool
 	PingTimeout time.Duration
@@ -37,6 +38,11 @@ func Parse() (Config, error) {
 		3*time.Second,
 		"maximum time to wait for a PONG",
 	)
+	target := flag.String(
+		"target",
+		"",
+		"ID of the peer to contact",
+	)
 
 	flag.Parse()
 
@@ -47,6 +53,7 @@ func Parse() (Config, error) {
 		Message:     *message,
 		Ping:        *ping,
 		PingTimeout: *pingTimeout,
+		Target:      *target,
 	}
 
 	if cfg.NodeID == "" {
@@ -57,12 +64,12 @@ func Parse() (Config, error) {
 		return Config{}, errors.New("port must be between 1 and 65535")
 	}
 
-	if cfg.Ping && len(cfg.Peers) != 1 {
-		return Config{}, errors.New("--ping requires exactly one --peer")
+	if cfg.Ping && cfg.Target == "" {
+		return Config{}, errors.New("--ping requires --target")
 	}
 
-	if cfg.Message != "" && len(cfg.Peers) != 1 {
-		return Config{}, errors.New("--message requires exactly one --peer")
+	if cfg.Message != "" && cfg.Target == "" {
+		return Config{}, errors.New("--message requires --target")
 	}
 
 	if cfg.Ping && cfg.Message != "" {

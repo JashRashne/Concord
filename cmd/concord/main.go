@@ -23,23 +23,31 @@ func main() {
 		n.AddPeer(p)
 	}
 
-	if cfg.Ping {
-		if err := n.Ping(cfg.Peers[0].Address, cfg.PingTimeout); err != nil {
-			fmt.Println("ping error:", err)
+	if cfg.Ping || cfg.Message != "" {
+		targetPeer, ok := n.Peer(cfg.Target)
+		if !ok {
+			fmt.Printf("unknown target peer: %s\n", cfg.Target)
 			os.Exit(1)
 		}
-	}
 
-	if cfg.Message != "" {
-		message := protocol.Message{
-			Type: protocol.MessageTypeMessage,
-			From: cfg.NodeID,
-			Data: cfg.Message,
+		if cfg.Ping {
+			if err := n.Ping(targetPeer.Address, cfg.PingTimeout); err != nil {
+				fmt.Println("ping error:", err)
+				os.Exit(1)
+			}
 		}
 
-		if err := n.Send(cfg.Peers[0].Address, message); err != nil {
-			fmt.Println("send error:", err)
-			os.Exit(1)
+		if cfg.Message != "" {
+			message := protocol.Message{
+				Type: protocol.MessageTypeMessage,
+				From: cfg.NodeID,
+				Data: cfg.Message,
+			}
+
+			if err := n.Send(targetPeer.Address, message); err != nil {
+				fmt.Println("send error:", err)
+				os.Exit(1)
+			}
 		}
 	}
 
