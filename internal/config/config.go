@@ -12,13 +12,13 @@ import (
 
 type peerList []peer.Peer
 type Config struct {
-	NodeID      string
-	Port        int
-	Peers       []peer.Peer
-	Target      string
-	Message     string
-	Ping        bool
-	PingTimeout time.Duration
+	NodeID         string
+	Port           int
+	Peers          []peer.Peer
+	Target         string
+	Message        string
+	Ping           bool
+	RequestTimeout time.Duration
 
 	Set    bool
 	Key    string
@@ -39,7 +39,7 @@ func Parse() (Config, error) {
 	)
 	message := flag.String("message", "", "message to send the peer node")
 	ping := flag.Bool("ping", false, "ping the configured peer")
-	pingTimeout := flag.Duration(
+	requestTimeout := flag.Duration(
 		"ping-timeout",
 		3*time.Second,
 		"maximum time to wait for a PONG",
@@ -81,13 +81,13 @@ func Parse() (Config, error) {
 	flag.Parse()
 
 	cfg := Config{
-		NodeID:      *nodeID,
-		Port:        *port,
-		Peers:       []peer.Peer(peers),
-		Message:     *message,
-		Ping:        *ping,
-		PingTimeout: *pingTimeout,
-		Target:      *target,
+		NodeID:         *nodeID,
+		Port:           *port,
+		Peers:          []peer.Peer(peers),
+		Message:        *message,
+		Ping:           *ping,
+		RequestTimeout: *requestTimeout,
+		Target:         *target,
 
 		Set:    *set,
 		Key:    *key,
@@ -116,12 +116,8 @@ func Parse() (Config, error) {
 		return Config{}, errors.New("--ping and --message cannot be used together")
 	}
 
-	if cfg.Ping && cfg.Message != "" {
-		return Config{}, errors.New("--ping and --message cannot be used together")
-	}
-
-	if cfg.PingTimeout <= 0 {
-		return Config{}, errors.New("ping timeout must be greater than zero")
+	if cfg.RequestTimeout <= 0 {
+		return Config{}, errors.New("request timeout must be greater than zero")
 	}
 
 	if err := validatePeers(cfg.NodeID, cfg.Peers); err != nil {

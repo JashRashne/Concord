@@ -206,87 +206,92 @@ func writeMessage(conn net.Conn, message protocol.Message) error {
 	return err
 }
 
-func (n *Node) Ping(address string, timeout time.Duration) error {
+func (n *Node) sendRequest(
+	address string,
+	request protocol.Message,
+	timeout time.Duration,
+) (protocol.Message, error) {
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
-		return err
+		return protocol.Message{}, err
 	}
 	defer conn.Close()
 
 	deadline := time.Now().Add(timeout)
 	if err := conn.SetDeadline(deadline); err != nil {
-		return err
+		return protocol.Message{}, err
 	}
 
-	ping := protocol.Message{
-		Type: protocol.MessageTypePing,
-		From: n.ID,
-	}
-
-	if err := writeMessage(conn, ping); err != nil {
-		return err
+	if err := writeMessage(conn, request); err != nil {
+		return protocol.Message{}, err
 	}
 
 	scanner := bufio.NewScanner(conn)
 
 	if !scanner.Scan() {
 		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("failed waiting for PONG from %s: %w", address, err)
+			return protocol.Message{}, fmt.Errorf(
+				"failed waiting for response from %s: %w",
+				address,
+				err,
+			)
 		}
 
-		return fmt.Errorf("peer %s closed connection without responding", address)
+		return protocol.Message{}, fmt.Errorf(
+			"peer %s closed connection without responding",
+			address,
+		)
 	}
 
 	var response protocol.Message
 
 	if err := json.Unmarshal([]byte(scanner.Text()), &response); err != nil {
+		return protocol.Message{}, err
+	}
+
+	return response, nil
+}
+
+func (n *Node) Ping(address string, timeout time.Duration) error {
+	request := protocol.Message{
+		Type: protocol.MessageTypePing,
+		From: n.ID,
+	}
+
+	response, err := n.sendRequest(address, request, timeout)
+	if err != nil {
 		return err
 	}
 
 	if response.Type != protocol.MessageTypePong {
-		return fmt.Errorf("expected PONG, received %s", response.Type)
+		return fmt.Errorf(
+			"expected PONG, received %s",
+			response.Type,
+		)
 	}
 
-	fmt.Printf("Node %s received PONG from %s\n", n.ID, response.From)
+	fmt.Printf(
+		"Node %s received PONG from %s\n",
+		n.ID,
+		response.From,
+	)
 
 	return nil
 }
 
-func (n *Node) Get(address string, key string, timeout time.Duration) (string, bool, error) {
-	conn, err := net.Dial("tcp", address)
-	if err != nil {
-		return "", false, err
-	}
-	defer conn.Close()
-
-	deadline := time.Now().Add(timeout)
-	if err := conn.SetDeadline(deadline); err != nil {
-		return "", false, err
-	}
-
+func (n *Node) Get(
+	address string,
+	key string,
+	timeout time.Duration,
+) (string, bool, error) {
 	request := protocol.Message{
 		Type: protocol.MessageTypeGet,
 		From: n.ID,
 		Key:  key,
 	}
 
-	if err := writeMessage(conn, request); err != nil {
-		return "", false, err
-	}
-
-	scanner := bufio.NewScanner(conn)
-
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return "", false, fmt.Errorf("failed waiting for GET response: %w", err)
-		}
-
-		return "", false, fmt.Errorf("peer closed connection without responding")
-	}
-
-	var response protocol.Message
-
-	if err := json.Unmarshal([]byte(scanner.Text()), &response); err != nil {
+	response, err := n.sendRequest(address, request, timeout)
+	if err != nil {
 		return "", false, err
 	}
 
@@ -305,35 +310,13 @@ func (n *Node) Get(address string, key string, timeout time.Duration) (string, b
 	}
 }
 
-func (n *Node) SendAndWaitForOK(address string, message protocol.Message, timeout time.Duration) error {
-	conn, err := net.Dial("tcp", address)
+func (n *Node) SendAndWaitForOK(
+	address string,
+	message protocol.Message,
+	timeout time.Duration,
+) error {
+	response, err := n.sendRequest(address, message, timeout)
 	if err != nil {
-		return err
-	}
-	defer conn.Close()
-
-	deadline := time.Now().Add(timeout)
-	if err := conn.SetDeadline(deadline); err != nil {
-		return err
-	}
-
-	if err := writeMessage(conn, message); err != nil {
-		return err
-	}
-
-	scanner := bufio.NewScanner(conn)
-
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return fmt.Errorf("failed waiting for response: %w", err)
-		}
-
-		return fmt.Errorf("peer closed connection without responding")
-	}
-
-	var response protocol.Message
-
-	if err := json.Unmarshal([]byte(scanner.Text()), &response); err != nil {
 		return err
 	}
 

@@ -31,7 +31,7 @@ func main() {
 		}
 
 		if cfg.Ping {
-			if err := n.Ping(targetPeer.Address, cfg.PingTimeout); err != nil {
+			if err := n.Ping(targetPeer.Address, cfg.RequestTimeout); err != nil {
 				fmt.Println("ping error:", err)
 				os.Exit(1)
 			}
@@ -61,7 +61,7 @@ func main() {
 			if err := n.SendAndWaitForOK(
 				targetPeer.Address,
 				message,
-				cfg.PingTimeout,
+				cfg.RequestTimeout,
 			); err != nil {
 				fmt.Println("set error:", err)
 				os.Exit(1)
@@ -72,7 +72,7 @@ func main() {
 			value, ok, err := n.Get(
 				targetPeer.Address,
 				cfg.Key,
-				cfg.PingTimeout,
+				cfg.RequestTimeout,
 			)
 			if err != nil {
 				fmt.Println("get error:", err)
@@ -97,7 +97,7 @@ func main() {
 			if err := n.SendAndWaitForOK(
 				targetPeer.Address,
 				message,
-				cfg.PingTimeout,
+				cfg.RequestTimeout,
 			); err != nil {
 				fmt.Println("delete error:", err)
 				os.Exit(1)
