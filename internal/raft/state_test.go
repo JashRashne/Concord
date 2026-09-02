@@ -272,7 +272,7 @@ func TestCandidateBecomesLeader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !state.BecomeLeader(term) {
+	if !state.BecomeLeader(term, "node-1") {
 		t.Fatal("expected candidate to become leader")
 	}
 
@@ -298,7 +298,7 @@ func TestOldElectionCannotBecomeLeader(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if state.BecomeLeader(oldTerm) {
+	if state.BecomeLeader(oldTerm, "node-1") {
 		t.Fatal(
 			"expected stale election to be unable to become leader",
 		)
@@ -313,7 +313,7 @@ func TestObserveHigherTermStepsDown(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !state.BecomeLeader(term) {
+	if !state.BecomeLeader(term, "node-1") {
 		t.Fatal("expected leader transition")
 	}
 
@@ -339,6 +339,125 @@ func TestObserveHigherTermStepsDown(t *testing.T) {
 		t.Fatalf(
 			"expected vote to be cleared, got %s",
 			got.VotedFor,
+		)
+	}
+}
+
+func TestStaleAppendEntriesRejected(t *testing.T) {
+	state := New()
+
+	if _, err := state.ObserveTerm(5); err != nil {
+		t.Fatal(err)
+	}
+
+	term, success, err := state.HandleAppendEntries(
+		4,
+		"node-2",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if success {
+		t.Fatal("expected stale heartbeat to be rejected")
+	}
+
+	if term != 5 {
+		t.Fatalf(
+			"expected term 5, got %d",
+			term,
+		)
+	}
+}
+func TestCandidateStepsDownForCurrentTermLeader(
+	t *testing.T,
+) {
+	state := New()
+
+	term, err := state.StartElection("node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, success, err := state.HandleAppendEntries(
+		term,
+		"node-2",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !success {
+		t.Fatal("expected heartbeat to succeed")
+	}
+
+	got := state.Snapshot()
+
+	if got.Role != RoleFollower {
+		t.Fatalf(
+			"expected FOLLOWER, got %s",
+			got.Role,
+		)
+	}
+
+	if got.LeaderID != "node-2" {
+		t.Fatalf(
+			"expected leader node-2, got %s",
+			got.LeaderID,
+		)
+	}
+}
+
+func TestHigherTermHeartbeatUpdatesState(t *testing.T) {
+	state := New()
+
+	_, _, err := state.HandleRequestVote(
+		4,
+		"node-2",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, success, err := state.HandleAppendEntries(
+		5,
+		"node-3",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !success {
+		t.Fatal("expected heartbeat to succeed")
+	}
+
+	got := state.Snapshot()
+
+	if got.CurrentTerm != 5 {
+		t.Fatalf(
+			"expected term 5, got %d",
+			got.CurrentTerm,
+		)
+	}
+
+	if got.Role != RoleFollower {
+		t.Fatalf(
+			"expected FOLLOWER, got %s",
+			got.Role,
+		)
+	}
+
+	if got.VotedFor != "" {
+		t.Fatalf(
+			"expected vote to be cleared, got %s",
+			got.VotedFor,
+		)
+	}
+
+	if got.LeaderID != "node-3" {
+		t.Fatalf(
+			"expected node-3 as leader, got %s",
+			got.LeaderID,
 		)
 	}
 }

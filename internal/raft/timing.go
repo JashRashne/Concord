@@ -10,6 +10,9 @@ const (
 	MaxElectionTimeout = 1400 * time.Millisecond
 
 	RequestVoteTimeout = 400 * time.Millisecond
+
+	HeartbeatInterval   = 200 * time.Millisecond
+	HeartbeatRPCTimeout = 150 * time.Millisecond
 )
 
 func RandomElectionTimeout() time.Duration {

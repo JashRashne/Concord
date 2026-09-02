@@ -32,6 +32,15 @@ type Node struct {
 	raftState  *raft.State
 
 	electionResetCh chan struct{}
+
+	stopCh    chan struct{}
+	closeOnce sync.Once
+	closeErr  error
+
+	listenerMu sync.Mutex
+	listener   net.Listener
+
+	raftWG sync.WaitGroup
 }
 
 type voteResult struct {
@@ -47,6 +56,7 @@ func New(id string, port int) *Node {
 		Store:           store.New(),
 		raftState:       raft.New(),
 		electionResetCh: make(chan struct{}, 1),
+		stopCh:          make(chan struct{}),
 	}
 }
 
@@ -160,14 +170,38 @@ func (n *Node) Send(address string, message protocol.Message) error {
 }
 
 func (n *Node) Start() error {
+
+	select {
+	case <-n.stopCh:
+		return fmt.Errorf("node is already closed")
+
+	default:
+	}
+
 	address := fmt.Sprintf(":%d", n.Port)
 
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
 	}
+
+	n.listenerMu.Lock()
+	n.listener = listener
+	n.listenerMu.Unlock()
+
 	defer listener.Close()
-	go n.runElectionLoop()
+
+	n.raftWG.Add(2)
+
+	go func() {
+		defer n.raftWG.Done()
+		n.runElectionLoop()
+	}()
+
+	go func() {
+		defer n.raftWG.Done()
+		n.runHeartbeatLoop()
+	}()
 
 	fmt.Printf("Node %s listening on port %d\n", n.ID, n.Port)
 	for _, p := range n.Peers {
@@ -177,7 +211,13 @@ func (n *Node) Start() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			return err
+			select {
+			case <-n.stopCh:
+				return nil
+
+			default:
+				return err
+			}
 		}
 
 		go n.handleConnection(conn)
@@ -187,7 +227,8 @@ func (n *Node) Start() error {
 func (n *Node) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
-	fmt.Printf("Node %s accepted connection from %s\n", n.ID, conn.RemoteAddr())
+	// removed heartbeat/connecting msg because heartbeat is generating a lot of msg noise
+	// fmt.Printf("Node %s accepted connection from %s\n", n.ID, conn.RemoteAddr())
 
 	scanner := bufio.NewScanner(conn)
 
@@ -332,6 +373,64 @@ func (n *Node) handleConnection(conn net.Conn) {
 			if err := writeMessage(conn, response); err != nil {
 				fmt.Println(
 					"failed to send REQUEST_VOTE_RESPONSE:",
+					err,
+				)
+				return
+			}
+
+		case protocol.MessageTypeAppendEntries:
+			if message.AppendEntries == nil {
+				fmt.Println("APPEND_ENTRIES missing payload")
+				return
+			}
+
+			before := n.raftState.Snapshot()
+
+			request := message.AppendEntries
+
+			term, success, err := n.raftState.HandleAppendEntries(
+				request.Term,
+				request.LeaderID,
+			)
+			if err != nil {
+				fmt.Println(
+					"failed to process APPEND_ENTRIES:",
+					err,
+				)
+				return
+			}
+
+			if success {
+				n.resetElectionTimer()
+			}
+
+			after := n.raftState.Snapshot()
+
+			if success &&
+				(before.LeaderID != after.LeaderID ||
+					before.CurrentTerm != after.CurrentTerm ||
+					before.Role != after.Role) {
+
+				fmt.Printf(
+					"Node %s following leader %s in term %d\n",
+					n.ID,
+					after.LeaderID,
+					after.CurrentTerm,
+				)
+			}
+
+			response := protocol.Message{
+				Type: protocol.MessageTypeAppendEntriesResponse,
+				From: n.ID,
+				AppendEntriesResponse: &protocol.AppendEntriesResponse{
+					Term:    term,
+					Success: success,
+				},
+			}
+
+			if err := writeMessage(conn, response); err != nil {
+				fmt.Println(
+					"failed to send APPEND_ENTRIES_RESPONSE:",
 					err,
 				)
 				return
@@ -490,12 +589,27 @@ func (n *Node) SendAndWaitForOK(
 }
 
 func (n *Node) Close() error {
-	if n.wal == nil {
-		return nil
-	}
+	n.closeOnce.Do(func() {
+		close(n.stopCh)
 
-	return n.wal.Close()
+		n.listenerMu.Lock()
+
+		if n.listener != nil {
+			_ = n.listener.Close()
+		}
+
+		n.listenerMu.Unlock()
+
+		n.raftWG.Wait()
+
+		if n.wal != nil {
+			n.closeErr = n.wal.Close()
+		}
+	})
+
+	return n.closeErr
 }
+
 func (n *Node) RaftSnapshot() raft.Snapshot {
 	return n.raftState.Snapshot()
 }
@@ -549,6 +663,7 @@ func (n *Node) runElectionLoop() {
 	timer := time.NewTimer(
 		raft.RandomElectionTimeout(),
 	)
+	defer timer.Stop()
 
 	for {
 		select {
@@ -574,6 +689,9 @@ func (n *Node) runElectionLoop() {
 			timer.Reset(
 				raft.RandomElectionTimeout(),
 			)
+
+		case <-n.stopCh:
+			return
 		}
 	}
 }
@@ -601,12 +719,15 @@ func (n *Node) startElection() {
 	majority := raft.Majority(clusterSize)
 
 	if votes >= majority {
-		if n.raftState.BecomeLeader(term) {
+		if n.raftState.BecomeLeader(term, n.ID) {
 			fmt.Printf(
-				"Node %s became LEADER for term %d\n",
+				"Node %s became LEADER for term %d with %d votes\n",
 				n.ID,
 				term,
+				votes,
 			)
+
+			n.sendHeartbeatRound(term)
 		}
 
 		return
@@ -682,15 +803,138 @@ func (n *Node) startElection() {
 		votes++
 
 		if votes >= majority {
-			if n.raftState.BecomeLeader(term) {
+			if n.raftState.BecomeLeader(term, n.ID) {
 				fmt.Printf(
 					"Node %s became LEADER for term %d with %d votes\n",
 					n.ID,
 					term,
 					votes,
 				)
+
+				n.sendHeartbeatRound(term)
 			}
 
+			return
+		}
+	}
+}
+
+func (n *Node) AppendEntries(
+	address string,
+	request protocol.AppendEntriesRequest,
+	timeout time.Duration,
+) (protocol.AppendEntriesResponse, error) {
+	message := protocol.Message{
+		Type:          protocol.MessageTypeAppendEntries,
+		From:          n.ID,
+		AppendEntries: &request,
+	}
+
+	response, err := n.sendRequest(
+		address,
+		message,
+		timeout,
+	)
+	if err != nil {
+		return protocol.AppendEntriesResponse{}, err
+	}
+
+	if response.Type != protocol.MessageTypeAppendEntriesResponse {
+		return protocol.AppendEntriesResponse{},
+			fmt.Errorf(
+				"expected APPEND_ENTRIES_RESPONSE, received %s",
+				response.Type,
+			)
+	}
+
+	if response.AppendEntriesResponse == nil {
+		return protocol.AppendEntriesResponse{},
+			fmt.Errorf(
+				"APPEND_ENTRIES_RESPONSE missing payload",
+			)
+	}
+
+	return *response.AppendEntriesResponse, nil
+}
+
+func (n *Node) sendHeartbeatRound(term uint64) {
+	var wg sync.WaitGroup
+
+	request := protocol.AppendEntriesRequest{
+		Term:     term,
+		LeaderID: n.ID,
+	}
+
+	for _, p := range n.Peers {
+		p := p
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			response, err := n.AppendEntries(
+				p.Address,
+				request,
+				raft.HeartbeatRPCTimeout,
+			)
+			if err != nil {
+				return
+			}
+
+			if response.Term <= term {
+				return
+			}
+
+			changed, err := n.raftState.ObserveTerm(
+				response.Term,
+			)
+			if err != nil {
+				fmt.Printf(
+					"Node %s failed to observe higher term %d: %v\n",
+					n.ID,
+					response.Term,
+					err,
+				)
+
+				return
+			}
+
+			if changed {
+				fmt.Printf(
+					"Node %s stepped down after discovering term %d\n",
+					n.ID,
+					response.Term,
+				)
+
+				n.resetElectionTimer()
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+func (n *Node) runHeartbeatLoop() {
+	ticker := time.NewTicker(
+		raft.HeartbeatInterval,
+	)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			snapshot := n.raftState.Snapshot()
+
+			if snapshot.Role != raft.RoleLeader {
+				continue
+			}
+
+			n.sendHeartbeatRound(
+				snapshot.CurrentTerm,
+			)
+
+		case <-n.stopCh:
 			return
 		}
 	}

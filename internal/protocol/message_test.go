@@ -77,3 +77,43 @@ func TestRequestVoteJSONRoundTrip(t *testing.T) {
 		)
 	}
 }
+
+func TestAppendEntriesJSONRoundTrip(t *testing.T) {
+	original := Message{
+		Type: MessageTypeAppendEntries,
+		From: "node-2",
+		AppendEntries: &AppendEntriesRequest{
+			Term:     7,
+			LeaderID: "node-2",
+		},
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decoded Message
+
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+
+	if decoded.AppendEntries == nil {
+		t.Fatal("expected AppendEntries payload")
+	}
+
+	if decoded.AppendEntries.Term != 7 {
+		t.Fatalf(
+			"expected term 7, got %d",
+			decoded.AppendEntries.Term,
+		)
+	}
+
+	if decoded.AppendEntries.LeaderID != "node-2" {
+		t.Fatalf(
+			"expected node-2, got %s",
+			decoded.AppendEntries.LeaderID,
+		)
+	}
+}

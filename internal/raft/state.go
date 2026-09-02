@@ -21,6 +21,7 @@ type Snapshot struct {
 	Role        Role
 	CurrentTerm uint64
 	VotedFor    string
+	LeaderID    string
 }
 
 type persistentState struct {
@@ -35,7 +36,8 @@ type State struct {
 	currentTerm uint64
 	votedFor    string
 
-	path string
+	path     string
+	leaderID string
 }
 
 func New() *State {
@@ -95,6 +97,7 @@ func (s *State) Snapshot() Snapshot {
 		Role:        s.role,
 		CurrentTerm: s.currentTerm,
 		VotedFor:    s.votedFor,
+		LeaderID:    s.leaderID,
 	}
 }
 
@@ -118,15 +121,18 @@ func (s *State) HandleRequestVote(
 		oldTerm := s.currentTerm
 		oldVotedFor := s.votedFor
 		oldRole := s.role
+		oldLeaderID := s.leaderID
 
 		s.currentTerm = term
 		s.votedFor = ""
 		s.role = RoleFollower
+		s.leaderID = ""
 
 		if err := s.persistLocked(); err != nil {
 			s.currentTerm = oldTerm
 			s.votedFor = oldVotedFor
 			s.role = oldRole
+			s.leaderID = oldLeaderID
 
 			return oldTerm, false, err
 		}
@@ -256,15 +262,18 @@ func (s *State) StartElection(
 	oldRole := s.role
 	oldTerm := s.currentTerm
 	oldVotedFor := s.votedFor
+	oldLeaderID := s.leaderID
 
 	s.role = RoleCandidate
 	s.currentTerm++
 	s.votedFor = candidateID
+	s.leaderID = ""
 
 	if err := s.persistLocked(); err != nil {
 		s.role = oldRole
 		s.currentTerm = oldTerm
 		s.votedFor = oldVotedFor
+		s.leaderID = oldLeaderID
 
 		return 0, err
 	}
@@ -272,9 +281,16 @@ func (s *State) StartElection(
 	return s.currentTerm, nil
 }
 
-func (s *State) BecomeLeader(term uint64) bool {
+func (s *State) BecomeLeader(
+	term uint64,
+	leaderID string,
+) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if leaderID == "" {
+		return false
+	}
 
 	if s.role != RoleCandidate {
 		return false
@@ -285,6 +301,7 @@ func (s *State) BecomeLeader(term uint64) bool {
 	}
 
 	s.role = RoleLeader
+	s.leaderID = leaderID
 
 	return true
 }
@@ -300,18 +317,67 @@ func (s *State) ObserveTerm(term uint64) (bool, error) {
 	oldRole := s.role
 	oldTerm := s.currentTerm
 	oldVotedFor := s.votedFor
+	oldLeaderID := s.leaderID
 
 	s.currentTerm = term
 	s.votedFor = ""
 	s.role = RoleFollower
+	s.leaderID = ""
 
 	if err := s.persistLocked(); err != nil {
 		s.role = oldRole
 		s.currentTerm = oldTerm
 		s.votedFor = oldVotedFor
+		s.leaderID = oldLeaderID
 
 		return false, err
 	}
 
 	return true, nil
+}
+
+func (s *State) HandleAppendEntries(
+	term uint64,
+	leaderID string,
+) (uint64, bool, error) {
+	if leaderID == "" {
+		return 0, false,
+			errors.New("leader ID cannot be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if term < s.currentTerm {
+		return s.currentTerm, false, nil
+	}
+
+	if term > s.currentTerm {
+		oldRole := s.role
+		oldTerm := s.currentTerm
+		oldVotedFor := s.votedFor
+		oldLeaderID := s.leaderID
+
+		s.currentTerm = term
+		s.votedFor = ""
+		s.role = RoleFollower
+		s.leaderID = leaderID
+
+		if err := s.persistLocked(); err != nil {
+			s.role = oldRole
+			s.currentTerm = oldTerm
+			s.votedFor = oldVotedFor
+			s.leaderID = oldLeaderID
+
+			return oldTerm, false, err
+		}
+
+		return s.currentTerm, true, nil
+	}
+
+	// Same term: a valid leader exists for this term.
+	s.role = RoleFollower
+	s.leaderID = leaderID
+
+	return s.currentTerm, true, nil
 }
