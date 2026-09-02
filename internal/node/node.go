@@ -15,6 +15,10 @@ import (
 
 	"github.com/jashrashne/concord/internal/command"
 	"github.com/jashrashne/concord/internal/wal"
+
+	"path/filepath"
+
+	"github.com/jashrashne/concord/internal/raft"
 )
 
 type Node struct {
@@ -25,14 +29,16 @@ type Node struct {
 
 	mutationMu sync.Mutex
 	wal        *wal.Log
+	raftState  *raft.State
 }
 
 func New(id string, port int) *Node {
 	return &Node{
-		ID:    id,
-		Port:  port,
-		Peers: make([]peer.Peer, 0),
-		Store: store.New(),
+		ID:        id,
+		Port:      port,
+		Peers:     make([]peer.Peer, 0),
+		Store:     store.New(),
+		raftState: raft.New(),
 	}
 }
 
@@ -46,7 +52,23 @@ func NewPersistent(
 		return nil, err
 	}
 
+	raftPath := filepath.Join(
+		filepath.Dir(walPath),
+		"raft-state.json",
+	)
+
+	persistentRaftState, err := raft.Open(raftPath)
+	if err != nil {
+		log.Close()
+
+		return nil, fmt.Errorf(
+			"open persistent Raft state: %w",
+			err,
+		)
+	}
+
 	n := New(id, port)
+	n.raftState = persistentRaftState
 	n.wal = log
 
 	records, err := log.ReadAll()
@@ -266,6 +288,43 @@ func (n *Node) handleConnection(conn net.Conn) {
 				return
 			}
 
+		case protocol.MessageTypeRequestVote:
+			if message.RequestVote == nil {
+				fmt.Println("REQUEST_VOTE missing payload")
+				return
+			}
+
+			request := message.RequestVote
+
+			term, granted, err := n.raftState.HandleRequestVote(
+				request.Term,
+				request.CandidateID,
+			)
+			if err != nil {
+				fmt.Println(
+					"failed to process REQUEST_VOTE:",
+					err,
+				)
+				return
+			}
+
+			response := protocol.Message{
+				Type: protocol.MessageTypeRequestVoteResponse,
+				From: n.ID,
+				RequestVoteResponse: &protocol.RequestVoteResponse{
+					Term:        term,
+					VoteGranted: granted,
+				},
+			}
+
+			if err := writeMessage(conn, response); err != nil {
+				fmt.Println(
+					"failed to send REQUEST_VOTE_RESPONSE:",
+					err,
+				)
+				return
+			}
+
 		default:
 			fmt.Printf(
 				"Node %s received message from %s: type=%s data=%s\n",
@@ -424,4 +483,45 @@ func (n *Node) Close() error {
 	}
 
 	return n.wal.Close()
+}
+func (n *Node) RaftSnapshot() raft.Snapshot {
+	return n.raftState.Snapshot()
+}
+
+func (n *Node) RequestVote(
+	address string,
+	request protocol.RequestVoteRequest,
+	timeout time.Duration,
+) (protocol.RequestVoteResponse, error) {
+	message := protocol.Message{
+		Type:        protocol.MessageTypeRequestVote,
+		From:        n.ID,
+		RequestVote: &request,
+	}
+
+	response, err := n.sendRequest(
+		address,
+		message,
+		timeout,
+	)
+	if err != nil {
+		return protocol.RequestVoteResponse{}, err
+	}
+
+	if response.Type != protocol.MessageTypeRequestVoteResponse {
+		return protocol.RequestVoteResponse{},
+			fmt.Errorf(
+				"expected REQUEST_VOTE_RESPONSE, received %s",
+				response.Type,
+			)
+	}
+
+	if response.RequestVoteResponse == nil {
+		return protocol.RequestVoteResponse{},
+			fmt.Errorf(
+				"REQUEST_VOTE_RESPONSE missing payload",
+			)
+	}
+
+	return *response.RequestVoteResponse, nil
 }
