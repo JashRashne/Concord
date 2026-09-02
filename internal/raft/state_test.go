@@ -231,3 +231,114 @@ func TestPersistentVoteSurvivesRestart(t *testing.T) {
 		)
 	}
 }
+
+func TestStartElection(t *testing.T) {
+	state := New()
+
+	term, err := state.StartElection("node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if term != 1 {
+		t.Fatalf(
+			"expected term 1, got %d",
+			term,
+		)
+	}
+
+	got := state.Snapshot()
+
+	if got.Role != RoleCandidate {
+		t.Fatalf(
+			"expected CANDIDATE, got %s",
+			got.Role,
+		)
+	}
+
+	if got.VotedFor != "node-1" {
+		t.Fatalf(
+			"expected self vote for node-1, got %s",
+			got.VotedFor,
+		)
+	}
+}
+
+func TestCandidateBecomesLeader(t *testing.T) {
+	state := New()
+
+	term, err := state.StartElection("node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !state.BecomeLeader(term) {
+		t.Fatal("expected candidate to become leader")
+	}
+
+	got := state.Snapshot()
+
+	if got.Role != RoleLeader {
+		t.Fatalf(
+			"expected LEADER, got %s",
+			got.Role,
+		)
+	}
+}
+
+func TestOldElectionCannotBecomeLeader(t *testing.T) {
+	state := New()
+
+	oldTerm, err := state.StartElection("node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := state.ObserveTerm(oldTerm + 1); err != nil {
+		t.Fatal(err)
+	}
+
+	if state.BecomeLeader(oldTerm) {
+		t.Fatal(
+			"expected stale election to be unable to become leader",
+		)
+	}
+}
+
+func TestObserveHigherTermStepsDown(t *testing.T) {
+	state := New()
+
+	term, err := state.StartElection("node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !state.BecomeLeader(term) {
+		t.Fatal("expected leader transition")
+	}
+
+	changed, err := state.ObserveTerm(term + 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !changed {
+		t.Fatal("expected higher term to be observed")
+	}
+
+	got := state.Snapshot()
+
+	if got.Role != RoleFollower {
+		t.Fatalf(
+			"expected FOLLOWER, got %s",
+			got.Role,
+		)
+	}
+
+	if got.VotedFor != "" {
+		t.Fatalf(
+			"expected vote to be cleared, got %s",
+			got.VotedFor,
+		)
+	}
+}

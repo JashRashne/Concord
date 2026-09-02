@@ -30,15 +30,23 @@ type Node struct {
 	mutationMu sync.Mutex
 	wal        *wal.Log
 	raftState  *raft.State
+
+	electionResetCh chan struct{}
+}
+
+type voteResult struct {
+	response protocol.RequestVoteResponse
+	err      error
 }
 
 func New(id string, port int) *Node {
 	return &Node{
-		ID:        id,
-		Port:      port,
-		Peers:     make([]peer.Peer, 0),
-		Store:     store.New(),
-		raftState: raft.New(),
+		ID:              id,
+		Port:            port,
+		Peers:           make([]peer.Peer, 0),
+		Store:           store.New(),
+		raftState:       raft.New(),
+		electionResetCh: make(chan struct{}, 1),
 	}
 }
 
@@ -159,6 +167,7 @@ func (n *Node) Start() error {
 		return err
 	}
 	defer listener.Close()
+	go n.runElectionLoop()
 
 	fmt.Printf("Node %s listening on port %d\n", n.ID, n.Port)
 	for _, p := range n.Peers {
@@ -306,6 +315,9 @@ func (n *Node) handleConnection(conn net.Conn) {
 					err,
 				)
 				return
+			}
+			if granted {
+				n.resetElectionTimer()
 			}
 
 			response := protocol.Message{
@@ -524,4 +536,162 @@ func (n *Node) RequestVote(
 	}
 
 	return *response.RequestVoteResponse, nil
+}
+
+func (n *Node) resetElectionTimer() {
+	select {
+	case n.electionResetCh <- struct{}{}:
+	default:
+	}
+}
+
+func (n *Node) runElectionLoop() {
+	timer := time.NewTimer(
+		raft.RandomElectionTimeout(),
+	)
+
+	for {
+		select {
+		case <-timer.C:
+			snapshot := n.raftState.Snapshot()
+
+			if snapshot.Role != raft.RoleLeader {
+				n.startElection()
+			}
+
+			timer.Reset(
+				raft.RandomElectionTimeout(),
+			)
+
+		case <-n.electionResetCh:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+
+			timer.Reset(
+				raft.RandomElectionTimeout(),
+			)
+		}
+	}
+}
+
+func (n *Node) startElection() {
+	term, err := n.raftState.StartElection(n.ID)
+	if err != nil {
+		fmt.Printf(
+			"Node %s failed to start election: %v\n",
+			n.ID,
+			err,
+		)
+		return
+	}
+
+	fmt.Printf(
+		"Node %s started election for term %d\n",
+		n.ID,
+		term,
+	)
+
+	votes := 1
+
+	clusterSize := len(n.Peers) + 1
+	majority := raft.Majority(clusterSize)
+
+	if votes >= majority {
+		if n.raftState.BecomeLeader(term) {
+			fmt.Printf(
+				"Node %s became LEADER for term %d\n",
+				n.ID,
+				term,
+			)
+		}
+
+		return
+	}
+
+	results := make(
+		chan voteResult,
+		len(n.Peers),
+	)
+
+	request := protocol.RequestVoteRequest{
+		Term:         term,
+		CandidateID:  n.ID,
+		LastLogIndex: 0,
+		LastLogTerm:  0,
+	}
+
+	for _, p := range n.Peers {
+		p := p
+
+		go func() {
+			response, err := n.RequestVote(
+				p.Address,
+				request,
+				raft.RequestVoteTimeout,
+			)
+
+			results <- voteResult{
+				response: response,
+				err:      err,
+			}
+		}()
+	}
+
+	for range n.Peers {
+		result := <-results
+
+		if result.err != nil {
+			continue
+		}
+
+		if result.response.Term > term {
+			_, err := n.raftState.ObserveTerm(
+				result.response.Term,
+			)
+
+			if err != nil {
+				fmt.Printf(
+					"Node %s failed to observe higher term: %v\n",
+					n.ID,
+					err,
+				)
+			}
+
+			return
+		}
+
+		snapshot := n.raftState.Snapshot()
+
+		if snapshot.Role != raft.RoleCandidate ||
+			snapshot.CurrentTerm != term {
+			return
+		}
+
+		if result.response.Term != term {
+			continue
+		}
+
+		if !result.response.VoteGranted {
+			continue
+		}
+
+		votes++
+
+		if votes >= majority {
+			if n.raftState.BecomeLeader(term) {
+				fmt.Printf(
+					"Node %s became LEADER for term %d with %d votes\n",
+					n.ID,
+					term,
+					votes,
+				)
+			}
+
+			return
+		}
+	}
 }

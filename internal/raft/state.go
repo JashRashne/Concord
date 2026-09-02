@@ -242,3 +242,76 @@ func (s *State) persistLocked() error {
 
 	return nil
 }
+
+func (s *State) StartElection(
+	candidateID string,
+) (uint64, error) {
+	if candidateID == "" {
+		return 0, errors.New("candidate ID cannot be empty")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	oldRole := s.role
+	oldTerm := s.currentTerm
+	oldVotedFor := s.votedFor
+
+	s.role = RoleCandidate
+	s.currentTerm++
+	s.votedFor = candidateID
+
+	if err := s.persistLocked(); err != nil {
+		s.role = oldRole
+		s.currentTerm = oldTerm
+		s.votedFor = oldVotedFor
+
+		return 0, err
+	}
+
+	return s.currentTerm, nil
+}
+
+func (s *State) BecomeLeader(term uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.role != RoleCandidate {
+		return false
+	}
+
+	if s.currentTerm != term {
+		return false
+	}
+
+	s.role = RoleLeader
+
+	return true
+}
+
+func (s *State) ObserveTerm(term uint64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if term <= s.currentTerm {
+		return false, nil
+	}
+
+	oldRole := s.role
+	oldTerm := s.currentTerm
+	oldVotedFor := s.votedFor
+
+	s.currentTerm = term
+	s.votedFor = ""
+	s.role = RoleFollower
+
+	if err := s.persistLocked(); err != nil {
+		s.role = oldRole
+		s.currentTerm = oldTerm
+		s.votedFor = oldVotedFor
+
+		return false, err
+	}
+
+	return true, nil
+}
