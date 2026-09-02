@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/jashrashne/concord/internal/config"
 	"github.com/jashrashne/concord/internal/node"
@@ -17,7 +18,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	n := node.New(cfg.NodeID, cfg.Port)
+	commandMode :=
+		cfg.Ping ||
+			cfg.Message != "" ||
+			cfg.Set ||
+			cfg.Get ||
+			cfg.Delete
+
+	var n *node.Node
+
+	if commandMode {
+		n = node.New(cfg.NodeID, cfg.Port)
+	} else {
+		walPath := filepath.Join(
+			cfg.DataDir,
+			cfg.NodeID,
+			"wal.log",
+		)
+
+		n, err = node.NewPersistent(
+			cfg.NodeID,
+			cfg.Port,
+			walPath,
+		)
+		if err != nil {
+			fmt.Println("node recovery error:", err)
+			os.Exit(1)
+		}
+
+		defer n.Close()
+	}
 
 	for _, p := range cfg.Peers {
 		n.AddPeer(p)

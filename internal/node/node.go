@@ -10,6 +10,11 @@ import (
 	"github.com/jashrashne/concord/internal/peer"
 	"github.com/jashrashne/concord/internal/protocol"
 	"github.com/jashrashne/concord/internal/store"
+
+	"sync"
+
+	"github.com/jashrashne/concord/internal/command"
+	"github.com/jashrashne/concord/internal/wal"
 )
 
 type Node struct {
@@ -17,6 +22,9 @@ type Node struct {
 	Port  int
 	Peers []peer.Peer
 	Store *store.Store
+
+	mutationMu sync.Mutex
+	wal        *wal.Log
 }
 
 func New(id string, port int) *Node {
@@ -26,6 +34,69 @@ func New(id string, port int) *Node {
 		Peers: make([]peer.Peer, 0),
 		Store: store.New(),
 	}
+}
+
+func NewPersistent(
+	id string,
+	port int,
+	walPath string,
+) (*Node, error) {
+	log, err := wal.Open(walPath)
+	if err != nil {
+		return nil, err
+	}
+
+	n := New(id, port)
+	n.wal = log
+
+	records, err := log.ReadAll()
+	if err != nil {
+		log.Close()
+		return nil, fmt.Errorf("recover WAL: %w", err)
+	}
+
+	for _, record := range records {
+		if err := n.applyCommand(record.Command, false); err != nil {
+			log.Close()
+			return nil, fmt.Errorf("replay WAL: %w", err)
+		}
+	}
+
+	return n, nil
+}
+
+func (n *Node) applyCommand(
+	cmd command.Command,
+	persist bool,
+) error {
+	if err := cmd.Validate(); err != nil {
+		return err
+	}
+
+	n.mutationMu.Lock()
+	defer n.mutationMu.Unlock()
+
+	if persist && n.wal != nil {
+		if err := n.wal.Append(wal.NewRecord(cmd)); err != nil {
+			return fmt.Errorf("append command to WAL: %w", err)
+		}
+	}
+
+	switch cmd.Type {
+	case command.TypeSet:
+		n.Store.Set(cmd.Key, cmd.Value)
+
+	case command.TypeDelete:
+		n.Store.Delete(cmd.Key)
+
+	default:
+		return fmt.Errorf(
+			"unsupported command type %q",
+			cmd.Type,
+		)
+	}
+
+	return nil
 }
 
 func (n *Node) AddPeer(p peer.Peer) {
@@ -112,7 +183,16 @@ func (n *Node) handleConnection(conn net.Conn) {
 			}
 
 		case protocol.MessageTypeSet:
-			n.Store.Set(message.Key, message.Value)
+			cmd := command.Command{
+				Type:  command.TypeSet,
+				Key:   message.Key,
+				Value: message.Value,
+			}
+
+			if err := n.applyCommand(cmd, true); err != nil {
+				fmt.Println("failed to apply SET:", err)
+				return
+			}
 
 			fmt.Printf(
 				"Node %s stored key=%s value=%s\n",
@@ -160,7 +240,15 @@ func (n *Node) handleConnection(conn net.Conn) {
 			}
 
 		case protocol.MessageTypeDelete:
-			n.Store.Delete(message.Key)
+			cmd := command.Command{
+				Type: command.TypeDelete,
+				Key:  message.Key,
+			}
+
+			if err := n.applyCommand(cmd, true); err != nil {
+				fmt.Println("failed to apply DELETE:", err)
+				return
+			}
 
 			fmt.Printf(
 				"Node %s deleted key=%s\n",
@@ -328,4 +416,12 @@ func (n *Node) SendAndWaitForOK(
 	}
 
 	return nil
+}
+
+func (n *Node) Close() error {
+	if n.wal == nil {
+		return nil
+	}
+
+	return n.wal.Close()
 }

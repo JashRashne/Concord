@@ -8,8 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jashrashne/concord/internal/command"
 	"github.com/jashrashne/concord/internal/peer"
 	"github.com/jashrashne/concord/internal/protocol"
+
+	"path/filepath"
 )
 
 func TestPeerFindsPeerByID(t *testing.T) {
@@ -219,5 +222,127 @@ func TestSendAndWaitForOKRejectsUnexpectedResponse(t *testing.T) {
 
 	if err := <-serverErr; err != nil {
 		t.Fatalf("fake server failed: %v", err)
+	}
+}
+
+func TestPersistentNodeRecoversState(t *testing.T) {
+	walPath := filepath.Join(
+		t.TempDir(),
+		"node-1",
+		"wal.log",
+	)
+
+	node1, err := NewPersistent(
+		"node-1",
+		8080,
+		walPath,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := node1.applyCommand(
+		command.Command{
+			Type:  command.TypeSet,
+			Key:   "name",
+			Value: "alice",
+		},
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := node1.applyCommand(
+		command.Command{
+			Type:  command.TypeSet,
+			Key:   "temporary",
+			Value: "value",
+		},
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := node1.applyCommand(
+		command.Command{
+			Type: command.TypeDelete,
+			Key:  "temporary",
+		},
+		true,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := node1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	node2, err := NewPersistent(
+		"node-1",
+		8080,
+		walPath,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer node2.Close()
+
+	value, ok := node2.Store.Get("name")
+
+	if !ok {
+		t.Fatal("expected recovered key name")
+	}
+
+	if value != "alice" {
+		t.Fatalf(
+			"expected alice, got %s",
+			value,
+		)
+	}
+
+	if _, ok := node2.Store.Get("temporary"); ok {
+		t.Fatal(
+			"expected deleted key to remain deleted after recovery",
+		)
+	}
+}
+func TestPersistentMutationDoesNotApplyWhenWALFails(
+	t *testing.T,
+) {
+	walPath := filepath.Join(
+		t.TempDir(),
+		"wal.log",
+	)
+
+	n, err := NewPersistent(
+		"node-1",
+		8080,
+		walPath,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := n.wal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = n.applyCommand(
+		command.Command{
+			Type:  command.TypeSet,
+			Key:   "name",
+			Value: "alice",
+		},
+		true,
+	)
+
+	if err == nil {
+		t.Fatal("expected WAL append to fail")
+	}
+
+	if _, ok := n.Store.Get("name"); ok {
+		t.Fatal(
+			"expected Store to remain unchanged when WAL append fails",
+		)
 	}
 }

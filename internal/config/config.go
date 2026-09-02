@@ -25,6 +25,8 @@ type Config struct {
 	Value  string
 	Get    bool
 	Delete bool
+
+	DataDir string
 }
 
 func Parse() (Config, error) {
@@ -40,7 +42,7 @@ func Parse() (Config, error) {
 	message := flag.String("message", "", "message to send the peer node")
 	ping := flag.Bool("ping", false, "ping the configured peer")
 	requestTimeout := flag.Duration(
-		"ping-timeout",
+		"request-timeout",
 		3*time.Second,
 		"maximum time to wait for a PONG",
 	)
@@ -78,6 +80,12 @@ func Parse() (Config, error) {
 		"delete a key from the target peer",
 	)
 
+	dataDir := flag.String(
+		"data-dir",
+		"data",
+		"directory for persistent Concord data",
+	)
+
 	flag.Parse()
 
 	cfg := Config{
@@ -94,6 +102,8 @@ func Parse() (Config, error) {
 		Value:  *value,
 		Get:    *get,
 		Delete: *deleteKey,
+
+		DataDir: *dataDir,
 	}
 
 	if cfg.NodeID == "" {
@@ -158,6 +168,10 @@ func Parse() (Config, error) {
 
 	if cfg.Delete && (cfg.Set || cfg.Get || cfg.Ping || cfg.Message != "") {
 		return Config{}, errors.New("--delete cannot be used with --set, --get, --ping, or --message")
+	}
+
+	if cfg.DataDir == "" {
+		return Config{}, errors.New("data directory cannot be empty")
 	}
 
 	return cfg, nil
