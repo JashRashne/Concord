@@ -735,7 +735,7 @@ func (n *Node) startElection() {
 				term,
 				votes,
 			)
-
+			n.initializeLeaderReplication()
 			n.sendHeartbeatRound(term)
 		}
 
@@ -822,7 +822,7 @@ func (n *Node) startElection() {
 					term,
 					votes,
 				)
-
+				n.initializeLeaderReplication()
 				n.sendHeartbeatRound(term)
 			}
 
@@ -869,17 +869,10 @@ func (n *Node) AppendEntries(
 	return *response.AppendEntriesResponse, nil
 }
 
-func (n *Node) sendHeartbeatRound(term uint64) {
+func (n *Node) sendHeartbeatRound(
+	term uint64,
+) {
 	var wg sync.WaitGroup
-
-	request := protocol.AppendEntriesRequest{
-		Term:         term,
-		LeaderID:     n.ID,
-		PrevLogIndex: 0,
-		PrevLogTerm:  0,
-		Entries:      nil,
-		LeaderCommit: 0,
-	}
 
 	for _, p := range n.Peers {
 		p := p
@@ -889,22 +882,54 @@ func (n *Node) sendHeartbeatRound(term uint64) {
 		go func() {
 			defer wg.Done()
 
-			response, err := n.AppendEntries(
-				p.Address,
-				request,
-				raft.HeartbeatRPCTimeout,
+			n.replicateToPeer(
+				p,
+				term,
 			)
-			if err != nil {
-				return
-			}
+		}()
+	}
 
-			if response.Term <= term {
-				return
-			}
-
-			changed, err := n.raftState.ObserveTerm(
-				response.Term,
+	wg.Wait()
+}
+func (n *Node) replicateToPeer(
+	p peer.Peer,
+	term uint64,
+) {
+	for {
+		batch, ok :=
+			n.raftState.BuildReplicationBatch(
+				p.ID,
+				term,
 			)
+
+		if !ok {
+			return
+		}
+
+		request := protocol.AppendEntriesRequest{
+			Term:         batch.Term,
+			LeaderID:     n.ID,
+			PrevLogIndex: batch.PrevLogIndex,
+			PrevLogTerm:  batch.PrevLogTerm,
+			Entries:      batch.Entries,
+			LeaderCommit: batch.LeaderCommit,
+		}
+
+		response, err := n.AppendEntries(
+			p.Address,
+			request,
+			raft.HeartbeatRPCTimeout,
+		)
+		if err != nil {
+			return
+		}
+
+		if response.Term > term {
+			changed, err :=
+				n.raftState.ObserveTerm(
+					response.Term,
+				)
+
 			if err != nil {
 				fmt.Printf(
 					"Node %s failed to observe higher term %d: %v\n",
@@ -925,10 +950,40 @@ func (n *Node) sendHeartbeatRound(term uint64) {
 
 				n.resetElectionTimer()
 			}
-		}()
-	}
 
-	wg.Wait()
+			return
+		}
+
+		snapshot :=
+			n.raftState.Snapshot()
+
+		if snapshot.Role != raft.RoleLeader ||
+			snapshot.CurrentTerm != term {
+			return
+		}
+
+		if response.Success {
+			n.raftState.RecordReplication(
+				p.ID,
+				term,
+				response.MatchIndex,
+			)
+
+			n.raftState.AdvanceCommitIndex(
+				len(n.Peers) + 1,
+			)
+
+			return
+		}
+
+		if !n.raftState.BackoffNextIndex(
+			p.ID,
+			term,
+			batch.NextIndex,
+		) {
+			return
+		}
+	}
 }
 
 func (n *Node) runHeartbeatLoop() {
@@ -954,4 +1009,23 @@ func (n *Node) runHeartbeatLoop() {
 			return
 		}
 	}
+}
+
+func (n *Node) initializeLeaderReplication() {
+	peerIDs := make(
+		[]string,
+		0,
+		len(n.Peers),
+	)
+
+	for _, p := range n.Peers {
+		peerIDs = append(
+			peerIDs,
+			p.ID,
+		)
+	}
+
+	n.raftState.InitializeLeaderReplication(
+		peerIDs,
+	)
 }

@@ -22,6 +22,7 @@ type Snapshot struct {
 	CurrentTerm uint64
 	VotedFor    string
 	LeaderID    string
+	CommitIndex uint64
 }
 
 type persistentState struct {
@@ -40,12 +41,19 @@ type State struct {
 	leaderID string
 
 	log []LogEntry
+
+	commitIndex uint64
+
+	nextIndex  map[string]uint64
+	matchIndex map[string]uint64
 }
 
 func New() *State {
 	return &State{
-		role: RoleFollower,
-		log:  make([]LogEntry, 0),
+		role:       RoleFollower,
+		log:        make([]LogEntry, 0),
+		nextIndex:  make(map[string]uint64),
+		matchIndex: make(map[string]uint64),
 	}
 }
 
@@ -101,6 +109,7 @@ func (s *State) Snapshot() Snapshot {
 		CurrentTerm: s.currentTerm,
 		VotedFor:    s.votedFor,
 		LeaderID:    s.leaderID,
+		CommitIndex: s.commitIndex,
 	}
 }
 
@@ -109,6 +118,7 @@ func (s *State) HandleRequestVote(
 	candidateID string,
 	lastLogIndex uint64,
 	lastLogTerm uint64,
+
 ) (uint64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

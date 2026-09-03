@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jashrashne/concord/internal/command"
 	"github.com/jashrashne/concord/internal/peer"
 	"github.com/jashrashne/concord/internal/protocol"
 	"github.com/jashrashne/concord/internal/raft"
@@ -311,6 +312,93 @@ func TestLeaderRemainsStableWithHealthyCluster(
 			"term changed from %d to %d while cluster was healthy",
 			first.CurrentTerm,
 			current.CurrentTerm,
+		)
+	}
+}
+
+func TestLeaderReplicatesAndCommitsEntry(
+	t *testing.T,
+) {
+	nodes := newThreeNodeTestCluster(t)
+
+	startTestCluster(t, nodes)
+
+	leader, snapshot := waitForLeader(
+		t,
+		nodes,
+		5*time.Second,
+	)
+
+	entry, err :=
+		leader.raftState.AppendLeaderCommand(
+			command.Command{
+				Type:  command.TypeSet,
+				Key:   "name",
+				Value: "alice",
+			},
+		)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leader.sendHeartbeatRound(
+		snapshot.CurrentTerm,
+	)
+
+	deadline :=
+		time.Now().Add(3 * time.Second)
+
+	for time.Now().Before(deadline) {
+		allReplicated := true
+
+		for _, n := range nodes {
+			entries :=
+				n.raftState.LogEntries()
+
+			if len(entries) < 1 {
+				allReplicated = false
+				break
+			}
+		}
+
+		if allReplicated {
+			break
+		}
+
+		time.Sleep(
+			25 * time.Millisecond,
+		)
+	}
+
+	for _, n := range nodes {
+		entries :=
+			n.raftState.LogEntries()
+
+		if len(entries) != 1 {
+			t.Fatalf(
+				"node %s expected 1 log entry, got %d",
+				n.ID,
+				len(entries),
+			)
+		}
+
+		if entries[0].Command.Key != "name" ||
+			entries[0].Command.Value != "alice" {
+			t.Fatalf(
+				"node %s has unexpected command",
+				n.ID,
+			)
+		}
+	}
+
+	got := leader.RaftSnapshot()
+
+	if got.CommitIndex < entry.Index {
+		t.Fatalf(
+			"expected entry %d committed, commitIndex=%d",
+			entry.Index,
+			got.CommitIndex,
 		)
 	}
 }
