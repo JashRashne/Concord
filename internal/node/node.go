@@ -282,10 +282,22 @@ func (n *Node) handleConnection(conn net.Conn) {
 			}
 
 			if err := n.proposeCommand(cmd); err != nil {
-				fmt.Println(
-					"failed to commit SET:",
-					err,
-				)
+				response := protocol.Message{
+					Type: protocol.MessageTypeError,
+					From: n.ID,
+					Data: err.Error(),
+				}
+
+				if writeErr := writeMessage(
+					conn,
+					response,
+				); writeErr != nil {
+					fmt.Println(
+						"failed to send ERROR:",
+						writeErr,
+					)
+				}
+
 				return
 			}
 
@@ -307,6 +319,26 @@ func (n *Node) handleConnection(conn net.Conn) {
 			}
 
 		case protocol.MessageTypeGet:
+
+			snapshot := n.raftState.Snapshot()
+
+			if snapshot.Role != raft.RoleLeader {
+				response := protocol.Message{
+					Type:     protocol.MessageTypeNotLeader,
+					From:     n.ID,
+					LeaderID: snapshot.LeaderID,
+				}
+
+				if err := writeMessage(conn, response); err != nil {
+					fmt.Println(
+						"failed to send NOT_LEADER:",
+						err,
+					)
+				}
+
+				break
+			}
+
 			value, ok := n.Store.Get(message.Key)
 
 			if !ok {
@@ -341,10 +373,22 @@ func (n *Node) handleConnection(conn net.Conn) {
 			}
 
 			if err := n.proposeCommand(cmd); err != nil {
-				fmt.Println(
-					"failed to commit DELETE:",
-					err,
-				)
+				response := protocol.Message{
+					Type: protocol.MessageTypeError,
+					From: n.ID,
+					Data: err.Error(),
+				}
+
+				if writeErr := writeMessage(
+					conn,
+					response,
+				); writeErr != nil {
+					fmt.Println(
+						"failed to send ERROR:",
+						writeErr,
+					)
+				}
+
 				return
 			}
 
@@ -606,6 +650,19 @@ func (n *Node) Get(
 
 	case protocol.MessageTypeNotFound:
 		return "", false, nil
+	case protocol.MessageTypeNotLeader:
+		if response.LeaderID != "" {
+			return "", false, fmt.Errorf(
+				"peer %s is not leader; leader is %s",
+				response.From,
+				response.LeaderID,
+			)
+		}
+
+		return "", false, fmt.Errorf(
+			"peer %s is not leader",
+			response.From,
+		)
 
 	default:
 		return "", false, fmt.Errorf(
@@ -625,7 +682,11 @@ func (n *Node) SendAndWaitForOK(
 		return err
 	}
 
-	if response.Type == protocol.MessageTypeNotLeader {
+	switch response.Type {
+	case protocol.MessageTypeOK:
+		return nil
+
+	case protocol.MessageTypeNotLeader:
 		if response.LeaderID != "" {
 			return fmt.Errorf(
 				"peer %s is not leader; leader is %s",
@@ -638,9 +699,15 @@ func (n *Node) SendAndWaitForOK(
 			"peer %s is not leader",
 			response.From,
 		)
-	}
 
-	if response.Type != protocol.MessageTypeOK {
+	case protocol.MessageTypeError:
+		return fmt.Errorf(
+			"peer %s returned error: %s",
+			response.From,
+			response.Data,
+		)
+
+	default:
 		return fmt.Errorf(
 			"expected OK response, received %s",
 			response.Type,

@@ -17,6 +17,7 @@ const (
 	MessageTypeAppendEntries         = "APPEND_ENTRIES"
 	MessageTypeAppendEntriesResponse = "APPEND_ENTRIES_RESPONSE"
 	MessageTypeNotLeader             = "NOT_LEADER"
+	MessageTypeError                 = "ERROR"
 )
 
 type Message struct {

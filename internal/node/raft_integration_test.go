@@ -515,3 +515,293 @@ func TestFollowerRejectsClientWrite(
 		)
 	}
 }
+
+func TestClientDeleteReplicatesThroughRaft(
+	t *testing.T,
+) {
+	nodes := newThreeNodeTestCluster(t)
+
+	startTestCluster(t, nodes)
+
+	leader, _ := waitForLeader(
+		t,
+		nodes,
+		5*time.Second,
+	)
+
+	client := New("client", 0)
+
+	address := fmt.Sprintf(
+		"127.0.0.1:%d",
+		leader.Port,
+	)
+
+	err := client.SendAndWaitForOK(
+		address,
+		protocol.Message{
+			Type:  protocol.MessageTypeSet,
+			From:  "client",
+			Key:   "name",
+			Value: "alice",
+		},
+		3*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = client.SendAndWaitForOK(
+		address,
+		protocol.Message{
+			Type: protocol.MessageTypeDelete,
+			From: "client",
+			Key:  "name",
+		},
+		3*time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(
+		3 * time.Second,
+	)
+
+	for time.Now().Before(deadline) {
+		allDeleted := true
+
+		for _, n := range nodes {
+			if _, ok := n.Store.Get("name"); ok {
+				allDeleted = false
+				break
+			}
+		}
+
+		if allDeleted {
+			return
+		}
+
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	t.Fatal(
+		"expected DELETE to be applied on all nodes",
+	)
+}
+
+func TestFollowerRejectsClientRead(
+	t *testing.T,
+) {
+	nodes := newThreeNodeTestCluster(t)
+
+	startTestCluster(t, nodes)
+
+	leader, _ := waitForLeader(
+		t,
+		nodes,
+		5*time.Second,
+	)
+
+	var follower *Node
+
+	for _, n := range nodes {
+		if n != leader {
+			follower = n
+			break
+		}
+	}
+
+	client := New("client", 0)
+
+	_, _, err := client.Get(
+		fmt.Sprintf(
+			"127.0.0.1:%d",
+			follower.Port,
+		),
+		"name",
+		time.Second,
+	)
+
+	if err == nil {
+		t.Fatal(
+			"expected follower GET to be rejected",
+		)
+	}
+}
+
+func TestLeaderDoesNotCommitWithoutQuorum(
+	t *testing.T,
+) {
+	nodes := newThreeNodeTestCluster(t)
+
+	startTestCluster(t, nodes)
+
+	leader, _ := waitForLeader(
+		t,
+		nodes,
+		5*time.Second,
+	)
+
+	for _, n := range nodes {
+		if n == leader {
+			continue
+		}
+
+		if err := n.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	client := New("client", 0)
+
+	err := client.SendAndWaitForOK(
+		fmt.Sprintf(
+			"127.0.0.1:%d",
+			leader.Port,
+		),
+		protocol.Message{
+			Type:  protocol.MessageTypeSet,
+			From:  "client",
+			Key:   "unsafe",
+			Value: "value",
+		},
+		3*time.Second,
+	)
+
+	if err == nil {
+		t.Fatal(
+			"expected write without quorum to fail",
+		)
+	}
+
+	if _, ok := leader.Store.Get("unsafe"); ok {
+		t.Fatal(
+			"uncommitted command must not reach Store",
+		)
+	}
+}
+
+func TestFollowerCatchesUpAfterMissingEntries(
+	t *testing.T,
+) {
+	nodes := newThreeNodeTestCluster(t)
+
+	startTestCluster(t, nodes)
+
+	leader, _ := waitForLeader(
+		t,
+		nodes,
+		5*time.Second,
+	)
+
+	var lagging *Node
+
+	for _, n := range nodes {
+		if n != leader {
+			lagging = n
+			break
+		}
+	}
+
+	laggingID := lagging.ID
+	laggingPort := lagging.Port
+
+	laggingPeers := append(
+		[]peer.Peer(nil),
+		lagging.Peers...,
+	)
+
+	if err := lagging.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	client := New("client", 0)
+
+	leaderAddress := fmt.Sprintf(
+		"127.0.0.1:%d",
+		leader.Port,
+	)
+
+	writes := []struct {
+		key   string
+		value string
+	}{
+		{"a", "1"},
+		{"b", "2"},
+		{"c", "3"},
+	}
+
+	for _, write := range writes {
+		err := client.SendAndWaitForOK(
+			leaderAddress,
+			protocol.Message{
+				Type:  protocol.MessageTypeSet,
+				From:  "client",
+				Key:   write.key,
+				Value: write.value,
+			},
+			3*time.Second,
+		)
+
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	restarted := New(
+		laggingID,
+		laggingPort,
+	)
+
+	for _, p := range laggingPeers {
+		restarted.AddPeer(p)
+	}
+
+	go func() {
+		_ = restarted.Start()
+	}()
+
+	t.Cleanup(func() {
+		_ = restarted.Close()
+	})
+
+	deadline := time.Now().Add(
+		5 * time.Second,
+	)
+
+	for time.Now().Before(deadline) {
+		caughtUp := true
+
+		for _, write := range writes {
+			value, ok :=
+				restarted.Store.Get(
+					write.key,
+				)
+
+			if !ok || value != write.value {
+				caughtUp = false
+				break
+			}
+		}
+
+		if caughtUp {
+			entries :=
+				restarted.raftState.LogEntries()
+
+			if len(entries) != 3 {
+				t.Fatalf(
+					"expected 3 replicated log entries, got %d",
+					len(entries),
+				)
+			}
+
+			return
+		}
+
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	t.Fatal(
+		"restarted follower did not catch up",
+	)
+}
