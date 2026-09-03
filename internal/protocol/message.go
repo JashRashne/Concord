@@ -16,6 +16,7 @@ const (
 	MessageTypeRequestVoteResponse   = "REQUEST_VOTE_RESPONSE"
 	MessageTypeAppendEntries         = "APPEND_ENTRIES"
 	MessageTypeAppendEntriesResponse = "APPEND_ENTRIES_RESPONSE"
+	MessageTypeNotLeader             = "NOT_LEADER"
 )
 
 type Message struct {
@@ -32,6 +33,7 @@ type Message struct {
 	AppendEntries *AppendEntriesRequest `json:"append_entries,omitempty"`
 
 	AppendEntriesResponse *AppendEntriesResponse `json:"append_entries_response,omitempty"`
+	LeaderID              string                 `json:"leader_id,omitempty"`
 }
 
 type RequestVoteRequest struct {

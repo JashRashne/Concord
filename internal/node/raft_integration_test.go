@@ -402,3 +402,116 @@ func TestLeaderReplicatesAndCommitsEntry(
 		)
 	}
 }
+
+func TestClientSetReplicatesThroughRaft(
+	t *testing.T,
+) {
+	nodes := newThreeNodeTestCluster(t)
+
+	startTestCluster(t, nodes)
+
+	leader, _ := waitForLeader(
+		t,
+		nodes,
+		5*time.Second,
+	)
+
+	client := New("client", 0)
+
+	address := fmt.Sprintf(
+		"127.0.0.1:%d",
+		leader.Port,
+	)
+
+	err := client.SendAndWaitForOK(
+		address,
+		protocol.Message{
+			Type:  protocol.MessageTypeSet,
+			From:  "client",
+			Key:   "name",
+			Value: "alice",
+		},
+		3*time.Second,
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline :=
+		time.Now().Add(3 * time.Second)
+
+	for time.Now().Before(deadline) {
+		allApplied := true
+
+		for _, n := range nodes {
+			value, ok :=
+				n.Store.Get("name")
+
+			if !ok || value != "alice" {
+				allApplied = false
+				break
+			}
+		}
+
+		if allApplied {
+			return
+		}
+
+		time.Sleep(
+			25 * time.Millisecond,
+		)
+	}
+
+	t.Fatal(
+		"expected SET to be applied on all nodes",
+	)
+}
+func TestFollowerRejectsClientWrite(
+	t *testing.T,
+) {
+	nodes := newThreeNodeTestCluster(t)
+
+	startTestCluster(t, nodes)
+
+	leader, _ := waitForLeader(
+		t,
+		nodes,
+		5*time.Second,
+	)
+
+	var follower *Node
+
+	for _, n := range nodes {
+		if n != leader {
+			follower = n
+			break
+		}
+	}
+
+	if follower == nil {
+		t.Fatal("expected follower")
+	}
+
+	client := New("client", 0)
+
+	err := client.SendAndWaitForOK(
+		fmt.Sprintf(
+			"127.0.0.1:%d",
+			follower.Port,
+		),
+		protocol.Message{
+			Type:  protocol.MessageTypeSet,
+			From:  "client",
+			Key:   "x",
+			Value: "10",
+		},
+		time.Second,
+	)
+
+	if err == nil {
+		t.Fatal(
+			"expected follower write to fail",
+		)
+	}
+}

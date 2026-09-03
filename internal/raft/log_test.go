@@ -35,6 +35,7 @@ func TestAppendEntriesToEmptyLog(t *testing.T) {
 			[]LogEntry{
 				testSetEntry(1, 1, "x", "10"),
 			},
+			0,
 		)
 
 	if err != nil {
@@ -78,6 +79,7 @@ func TestAppendEntriesRejectsMissingPrevIndex(
 			3,
 			1,
 			nil,
+			0,
 		)
 
 	if err != nil {
@@ -105,6 +107,7 @@ func TestAppendEntriesRejectsPrevTermMismatch(
 			[]LogEntry{
 				testSetEntry(1, 1, "x", "10"),
 			},
+			0,
 		)
 	if err != nil || !success {
 		t.Fatal("failed to prepare log")
@@ -117,6 +120,7 @@ func TestAppendEntriesRejectsPrevTermMismatch(
 			1,
 			99,
 			nil,
+			0,
 		)
 
 	if err != nil {
@@ -145,6 +149,7 @@ func TestAppendEntriesReplacesConflictingSuffix(
 				testSetEntry(2, 1, "b", "2"),
 				testSetEntry(3, 2, "old", "value"),
 			},
+			0,
 		)
 
 	if err != nil || !success {
@@ -160,6 +165,7 @@ func TestAppendEntriesReplacesConflictingSuffix(
 			[]LogEntry{
 				testSetEntry(3, 3, "new", "value"),
 			},
+			0,
 		)
 
 	if err != nil {
@@ -190,6 +196,48 @@ func TestAppendEntriesReplacesConflictingSuffix(
 		t.Fatalf(
 			"expected replacement command, got key %s",
 			entries[2].Command.Key,
+		)
+	}
+}
+
+func TestFollowerAdvancesCommitIndex(
+	t *testing.T,
+) {
+	state := New()
+
+	_, success, _, err :=
+		state.HandleAppendEntries(
+			1,
+			"node-1",
+			0,
+			0,
+			[]LogEntry{
+				testSetEntry(
+					1,
+					1,
+					"name",
+					"alice",
+				),
+			},
+			1,
+		)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !success {
+		t.Fatal(
+			"expected AppendEntries success",
+		)
+	}
+
+	got := state.Snapshot()
+
+	if got.CommitIndex != 1 {
+		t.Fatalf(
+			"expected commit index 1, got %d",
+			got.CommitIndex,
 		)
 	}
 }

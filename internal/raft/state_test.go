@@ -388,6 +388,7 @@ func TestStaleAppendEntriesRejected(t *testing.T) {
 		0,
 		0,
 		nil,
+		0,
 	)
 
 	if err != nil {
@@ -424,6 +425,7 @@ func TestCandidateStepsDownForCurrentTermLeader(
 		0,
 		0,
 		nil,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -469,6 +471,7 @@ func TestHigherTermHeartbeatUpdatesState(t *testing.T) {
 		0,
 		0,
 		nil,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -528,6 +531,7 @@ func TestRequestVoteRejectsCandidateWithStaleLog(
 					"10",
 				),
 			},
+			0,
 		)
 
 	if err != nil {

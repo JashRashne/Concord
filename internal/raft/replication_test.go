@@ -223,6 +223,7 @@ func TestCommitRequiresCurrentTermEntry(
 					"value",
 				),
 			},
+			0,
 		)
 
 	if err != nil || !success {

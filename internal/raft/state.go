@@ -23,6 +23,7 @@ type Snapshot struct {
 	VotedFor    string
 	LeaderID    string
 	CommitIndex uint64
+	LastApplied uint64
 }
 
 type persistentState struct {
@@ -46,6 +47,8 @@ type State struct {
 
 	nextIndex  map[string]uint64
 	matchIndex map[string]uint64
+
+	lastApplied uint64
 }
 
 func New() *State {
@@ -110,6 +113,7 @@ func (s *State) Snapshot() Snapshot {
 		VotedFor:    s.votedFor,
 		LeaderID:    s.leaderID,
 		CommitIndex: s.commitIndex,
+		LastApplied: s.lastApplied,
 	}
 }
 
@@ -369,7 +373,9 @@ func (s *State) HandleAppendEntries(
 	prevLogIndex uint64,
 	prevLogTerm uint64,
 	entries []LogEntry,
+	leaderCommit uint64,
 ) (uint64, bool, uint64, error) {
+
 	if leaderID == "" {
 		return 0, false, 0,
 			errors.New("leader ID cannot be empty")
@@ -415,6 +421,16 @@ func (s *State) HandleAppendEntries(
 
 	if err != nil {
 		return s.currentTerm, false, 0, err
+	}
+
+	if success && leaderCommit > s.commitIndex {
+		lastIndex := uint64(len(s.log))
+
+		if leaderCommit < lastIndex {
+			s.commitIndex = leaderCommit
+		} else {
+			s.commitIndex = lastIndex
+		}
 	}
 
 	return s.currentTerm,

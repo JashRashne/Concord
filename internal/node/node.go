@@ -28,6 +28,7 @@ type Node struct {
 	Store *store.Store
 
 	mutationMu sync.Mutex
+	applyMu    sync.Mutex
 	wal        *wal.Log
 	raftState  *raft.State
 
@@ -261,8 +262,30 @@ func (n *Node) handleConnection(conn net.Conn) {
 				Value: message.Value,
 			}
 
-			if err := n.applyCommand(cmd, true); err != nil {
-				fmt.Println("failed to apply SET:", err)
+			snapshot := n.raftState.Snapshot()
+
+			if snapshot.Role != raft.RoleLeader {
+				response := protocol.Message{
+					Type:     protocol.MessageTypeNotLeader,
+					From:     n.ID,
+					LeaderID: snapshot.LeaderID,
+				}
+
+				if err := writeMessage(conn, response); err != nil {
+					fmt.Println(
+						"failed to send NOT_LEADER:",
+						err,
+					)
+				}
+
+				break
+			}
+
+			if err := n.proposeCommand(cmd); err != nil {
+				fmt.Println(
+					"failed to commit SET:",
+					err,
+				)
 				return
 			}
 
@@ -317,8 +340,11 @@ func (n *Node) handleConnection(conn net.Conn) {
 				Key:  message.Key,
 			}
 
-			if err := n.applyCommand(cmd, true); err != nil {
-				fmt.Println("failed to apply DELETE:", err)
+			if err := n.proposeCommand(cmd); err != nil {
+				fmt.Println(
+					"failed to commit DELETE:",
+					err,
+				)
 				return
 			}
 
@@ -398,6 +424,7 @@ func (n *Node) handleConnection(conn net.Conn) {
 					request.PrevLogIndex,
 					request.PrevLogTerm,
 					request.Entries,
+					request.LeaderCommit,
 				)
 
 			if err != nil {
@@ -410,6 +437,17 @@ func (n *Node) handleConnection(conn net.Conn) {
 
 			if request.Term >= before.CurrentTerm {
 				n.resetElectionTimer()
+			}
+
+			if success {
+				if err := n.applyCommittedEntries(); err != nil {
+					fmt.Printf(
+						"Node %s failed applying committed entries: %v\n",
+						n.ID,
+						err,
+					)
+					return
+				}
 			}
 
 			after := n.raftState.Snapshot()
@@ -585,6 +623,21 @@ func (n *Node) SendAndWaitForOK(
 	response, err := n.sendRequest(address, message, timeout)
 	if err != nil {
 		return err
+	}
+
+	if response.Type == protocol.MessageTypeNotLeader {
+		if response.LeaderID != "" {
+			return fmt.Errorf(
+				"peer %s is not leader; leader is %s",
+				response.From,
+				response.LeaderID,
+			)
+		}
+
+		return fmt.Errorf(
+			"peer %s is not leader",
+			response.From,
+		)
 	}
 
 	if response.Type != protocol.MessageTypeOK {
@@ -1028,4 +1081,80 @@ func (n *Node) initializeLeaderReplication() {
 	n.raftState.InitializeLeaderReplication(
 		peerIDs,
 	)
+}
+
+func (n *Node) applyCommittedEntries() error {
+	n.applyMu.Lock()
+	defer n.applyMu.Unlock()
+
+	for {
+		entry, ok :=
+			n.raftState.NextCommittedEntry()
+
+		if !ok {
+			return nil
+		}
+
+		if err := n.applyCommand(
+			entry.Command,
+			true,
+		); err != nil {
+			return fmt.Errorf(
+				"apply committed entry %d: %w",
+				entry.Index,
+				err,
+			)
+		}
+
+		if err :=
+			n.raftState.MarkApplied(
+				entry.Index,
+			); err != nil {
+			return err
+		}
+
+		fmt.Printf(
+			"Node %s applied committed log entry %d\n",
+			n.ID,
+			entry.Index,
+		)
+	}
+}
+
+func (n *Node) proposeCommand(
+	cmd command.Command,
+) error {
+	entry, err :=
+		n.raftState.AppendLeaderCommand(cmd)
+
+	if err != nil {
+		return err
+	}
+
+	term := entry.Term
+
+	n.sendHeartbeatRound(term)
+
+	snapshot := n.raftState.Snapshot()
+
+	if snapshot.Role != raft.RoleLeader ||
+		snapshot.CurrentTerm != term {
+		return fmt.Errorf(
+			"leadership lost while proposing entry %d",
+			entry.Index,
+		)
+	}
+
+	if snapshot.CommitIndex < entry.Index {
+		return fmt.Errorf(
+			"entry %d was not committed by a quorum",
+			entry.Index,
+		)
+	}
+
+	if err := n.applyCommittedEntries(); err != nil {
+		return err
+	}
+
+	return nil
 }
