@@ -38,6 +38,8 @@ func TestRequestVoteRejectsStaleTerm(t *testing.T) {
 	_, granted, err := state.HandleRequestVote(
 		5,
 		"node-2",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +52,8 @@ func TestRequestVoteRejectsStaleTerm(t *testing.T) {
 	term, granted, err := state.HandleRequestVote(
 		4,
 		"node-3",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +77,8 @@ func TestStateVotesOncePerTerm(t *testing.T) {
 	_, granted, err := state.HandleRequestVote(
 		3,
 		"node-2",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +91,8 @@ func TestStateVotesOncePerTerm(t *testing.T) {
 	_, granted, err = state.HandleRequestVote(
 		3,
 		"node-3",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +113,8 @@ func TestStateAllowsRepeatedVoteForSameCandidate(
 	_, granted, err := state.HandleRequestVote(
 		3,
 		"node-2",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +127,8 @@ func TestStateAllowsRepeatedVoteForSameCandidate(
 	_, granted, err = state.HandleRequestVote(
 		3,
 		"node-2",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +152,8 @@ func TestHigherTermRequestForcesFollower(t *testing.T) {
 	term, granted, err := state.HandleRequestVote(
 		5,
 		"node-2",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -180,6 +194,8 @@ func TestPersistentVoteSurvivesRestart(t *testing.T) {
 	_, granted, err := state1.HandleRequestVote(
 		7,
 		"node-2",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +236,8 @@ func TestPersistentVoteSurvivesRestart(t *testing.T) {
 	_, granted, err = state2.HandleRequestVote(
 		7,
 		"node-3",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -284,6 +302,13 @@ func TestCandidateBecomesLeader(t *testing.T) {
 			got.Role,
 		)
 	}
+
+	if got.LeaderID != "node-1" {
+		t.Fatalf(
+			"expected leader node-1, got %s",
+			got.LeaderID,
+		)
+	}
 }
 
 func TestOldElectionCannotBecomeLeader(t *testing.T) {
@@ -341,6 +366,13 @@ func TestObserveHigherTermStepsDown(t *testing.T) {
 			got.VotedFor,
 		)
 	}
+
+	if got.LeaderID != "" {
+		t.Fatalf(
+			"expected leader ID to be cleared, got %s",
+			got.LeaderID,
+		)
+	}
 }
 
 func TestStaleAppendEntriesRejected(t *testing.T) {
@@ -350,16 +382,22 @@ func TestStaleAppendEntriesRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	term, success, err := state.HandleAppendEntries(
+	term, success, _, err := state.HandleAppendEntries(
 		4,
 		"node-2",
+		0,
+		0,
+		nil,
 	)
+
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if success {
-		t.Fatal("expected stale heartbeat to be rejected")
+		t.Fatal(
+			"expected stale heartbeat to be rejected",
+		)
 	}
 
 	if term != 5 {
@@ -369,6 +407,7 @@ func TestStaleAppendEntriesRejected(t *testing.T) {
 		)
 	}
 }
+
 func TestCandidateStepsDownForCurrentTermLeader(
 	t *testing.T,
 ) {
@@ -379,9 +418,12 @@ func TestCandidateStepsDownForCurrentTermLeader(
 		t.Fatal(err)
 	}
 
-	_, success, err := state.HandleAppendEntries(
+	_, success, _, err := state.HandleAppendEntries(
 		term,
 		"node-2",
+		0,
+		0,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -414,14 +456,19 @@ func TestHigherTermHeartbeatUpdatesState(t *testing.T) {
 	_, _, err := state.HandleRequestVote(
 		4,
 		"node-2",
+		0,
+		0,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, success, err := state.HandleAppendEntries(
+	_, success, _, err := state.HandleAppendEntries(
 		5,
 		"node-3",
+		0,
+		0,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -458,6 +505,65 @@ func TestHigherTermHeartbeatUpdatesState(t *testing.T) {
 		t.Fatalf(
 			"expected node-3 as leader, got %s",
 			got.LeaderID,
+		)
+	}
+}
+
+func TestRequestVoteRejectsCandidateWithStaleLog(
+	t *testing.T,
+) {
+	state := New()
+
+	_, success, _, err :=
+		state.HandleAppendEntries(
+			2,
+			"node-1",
+			0,
+			0,
+			[]LogEntry{
+				testSetEntry(
+					1,
+					2,
+					"x",
+					"10",
+				),
+			},
+		)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !success {
+		t.Fatal(
+			"failed to prepare local log",
+		)
+	}
+
+	_, granted, err :=
+		state.HandleRequestVote(
+			3,
+			"node-2",
+			0,
+			0,
+		)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if granted {
+		t.Fatal(
+			"expected candidate with stale log to be rejected",
+		)
+	}
+
+	got := state.Snapshot()
+
+	if got.CurrentTerm != 3 {
+		t.Fatalf(
+			"expected node to still observe newer term 3, got %d",
+			got.CurrentTerm,
 		)
 	}
 }

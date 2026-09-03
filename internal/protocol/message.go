@@ -1,5 +1,7 @@
 package protocol
 
+import "github.com/jashrashne/concord/internal/raft"
+
 const (
 	MessageTypeMessage               = "MESSAGE"
 	MessageTypePing                  = "PING"
@@ -45,11 +47,16 @@ type RequestVoteResponse struct {
 }
 
 type AppendEntriesRequest struct {
-	Term     uint64 `json:"term"`
-	LeaderID string `json:"leader_id"`
+	Term         uint64          `json:"term"`
+	LeaderID     string          `json:"leader_id"`
+	PrevLogIndex uint64          `json:"prev_log_index"`
+	PrevLogTerm  uint64          `json:"prev_log_term"`
+	Entries      []raft.LogEntry `json:"entries,omitempty"`
+	LeaderCommit uint64          `json:"leader_commit"`
 }
 
 type AppendEntriesResponse struct {
-	Term    uint64 `json:"term"`
-	Success bool   `json:"success"`
+	Term       uint64 `json:"term"`
+	Success    bool   `json:"success"`
+	MatchIndex uint64 `json:"match_index,omitempty"`
 }

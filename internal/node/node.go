@@ -346,10 +346,13 @@ func (n *Node) handleConnection(conn net.Conn) {
 
 			request := message.RequestVote
 
-			term, granted, err := n.raftState.HandleRequestVote(
-				request.Term,
-				request.CandidateID,
-			)
+			term, granted, err :=
+				n.raftState.HandleRequestVote(
+					request.Term,
+					request.CandidateID,
+					request.LastLogIndex,
+					request.LastLogTerm,
+				)
 			if err != nil {
 				fmt.Println(
 					"failed to process REQUEST_VOTE:",
@@ -388,10 +391,15 @@ func (n *Node) handleConnection(conn net.Conn) {
 
 			request := message.AppendEntries
 
-			term, success, err := n.raftState.HandleAppendEntries(
-				request.Term,
-				request.LeaderID,
-			)
+			term, success, matchIndex, err :=
+				n.raftState.HandleAppendEntries(
+					request.Term,
+					request.LeaderID,
+					request.PrevLogIndex,
+					request.PrevLogTerm,
+					request.Entries,
+				)
+
 			if err != nil {
 				fmt.Println(
 					"failed to process APPEND_ENTRIES:",
@@ -400,7 +408,7 @@ func (n *Node) handleConnection(conn net.Conn) {
 				return
 			}
 
-			if success {
+			if request.Term >= before.CurrentTerm {
 				n.resetElectionTimer()
 			}
 
@@ -423,8 +431,9 @@ func (n *Node) handleConnection(conn net.Conn) {
 				Type: protocol.MessageTypeAppendEntriesResponse,
 				From: n.ID,
 				AppendEntriesResponse: &protocol.AppendEntriesResponse{
-					Term:    term,
-					Success: success,
+					Term:       term,
+					Success:    success,
+					MatchIndex: matchIndex,
 				},
 			}
 
@@ -738,11 +747,14 @@ func (n *Node) startElection() {
 		len(n.Peers),
 	)
 
+	lastLogIndex, lastLogTerm :=
+		n.raftState.LastLogInfo()
+
 	request := protocol.RequestVoteRequest{
 		Term:         term,
 		CandidateID:  n.ID,
-		LastLogIndex: 0,
-		LastLogTerm:  0,
+		LastLogIndex: lastLogIndex,
+		LastLogTerm:  lastLogTerm,
 	}
 
 	for _, p := range n.Peers {
@@ -861,8 +873,12 @@ func (n *Node) sendHeartbeatRound(term uint64) {
 	var wg sync.WaitGroup
 
 	request := protocol.AppendEntriesRequest{
-		Term:     term,
-		LeaderID: n.ID,
+		Term:         term,
+		LeaderID:     n.ID,
+		PrevLogIndex: 0,
+		PrevLogTerm:  0,
+		Entries:      nil,
+		LeaderCommit: 0,
 	}
 
 	for _, p := range n.Peers {

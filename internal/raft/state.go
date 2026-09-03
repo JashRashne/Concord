@@ -38,11 +38,14 @@ type State struct {
 
 	path     string
 	leaderID string
+
+	log []LogEntry
 }
 
 func New() *State {
 	return &State{
 		role: RoleFollower,
+		log:  make([]LogEntry, 0),
 	}
 }
 
@@ -104,6 +107,8 @@ func (s *State) Snapshot() Snapshot {
 func (s *State) HandleRequestVote(
 	term uint64,
 	candidateID string,
+	lastLogIndex uint64,
+	lastLogTerm uint64,
 ) (uint64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -136,6 +141,18 @@ func (s *State) HandleRequestVote(
 
 			return oldTerm, false, err
 		}
+	}
+
+	localLastIndex, localLastTerm :=
+		s.lastLogInfoLocked()
+
+	candidateIsUpToDate :=
+		lastLogTerm > localLastTerm ||
+			(lastLogTerm == localLastTerm &&
+				lastLogIndex >= localLastIndex)
+
+	if !candidateIsUpToDate {
+		return s.currentTerm, false, nil
 	}
 
 	if s.votedFor != "" && s.votedFor != candidateID {
@@ -339,9 +356,12 @@ func (s *State) ObserveTerm(term uint64) (bool, error) {
 func (s *State) HandleAppendEntries(
 	term uint64,
 	leaderID string,
-) (uint64, bool, error) {
+	prevLogIndex uint64,
+	prevLogTerm uint64,
+	entries []LogEntry,
+) (uint64, bool, uint64, error) {
 	if leaderID == "" {
-		return 0, false,
+		return 0, false, 0,
 			errors.New("leader ID cannot be empty")
 	}
 
@@ -349,7 +369,7 @@ func (s *State) HandleAppendEntries(
 	defer s.mu.Unlock()
 
 	if term < s.currentTerm {
-		return s.currentTerm, false, nil
+		return s.currentTerm, false, 0, nil
 	}
 
 	if term > s.currentTerm {
@@ -369,15 +389,26 @@ func (s *State) HandleAppendEntries(
 			s.votedFor = oldVotedFor
 			s.leaderID = oldLeaderID
 
-			return oldTerm, false, err
+			return oldTerm, false, 0, err
 		}
-
-		return s.currentTerm, true, nil
+	} else {
+		s.role = RoleFollower
+		s.leaderID = leaderID
 	}
 
-	// Same term: a valid leader exists for this term.
-	s.role = RoleFollower
-	s.leaderID = leaderID
+	matchIndex, success, err :=
+		s.appendEntriesLocked(
+			prevLogIndex,
+			prevLogTerm,
+			entries,
+		)
 
-	return s.currentTerm, true, nil
+	if err != nil {
+		return s.currentTerm, false, 0, err
+	}
+
+	return s.currentTerm,
+		success,
+		matchIndex,
+		nil
 }

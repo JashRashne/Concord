@@ -3,6 +3,9 @@ package protocol
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/jashrashne/concord/internal/command"
+	"github.com/jashrashne/concord/internal/raft"
 )
 
 func TestMessageJSONRoundTrip(t *testing.T) {
@@ -83,8 +86,22 @@ func TestAppendEntriesJSONRoundTrip(t *testing.T) {
 		Type: MessageTypeAppendEntries,
 		From: "node-2",
 		AppendEntries: &AppendEntriesRequest{
-			Term:     7,
-			LeaderID: "node-2",
+			Term:         7,
+			LeaderID:     "node-2",
+			PrevLogIndex: 1,
+			PrevLogTerm:  6,
+			Entries: []raft.LogEntry{
+				{
+					Index: 2,
+					Term:  7,
+					Command: command.Command{
+						Type:  command.TypeSet,
+						Key:   "name",
+						Value: "alice",
+					},
+				},
+			},
+			LeaderCommit: 1,
 		},
 	}
 
